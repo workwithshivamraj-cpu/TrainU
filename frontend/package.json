@@ -31,7 +31,7 @@
     "@angular/cli": "22.2.0",
     "@angular/compiler-cli": "22.2.0",
     "@playwright/test": "^1.62.1",
-    "@types/jasmine": "~5.1.0",
+    "@types/jasmine": "~6.0.0",
     "autoprefixer": "^10.5.4",
     "jasmine-core": "~5.2.0",
     "karma": "~6.4.0",
