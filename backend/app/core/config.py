@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     S3_REGION: str = "us-east-1"
     S3_USE_SSL: bool = False
     S3_PUBLIC_ENDPOINT_URL: str = "http://localhost:9000"
+    STORAGE_AUTO_CREATE_BUCKET: bool = False
 
     # --- Upload limits ---
     MAX_VIDEO_SIZE_MB: int = 1024
@@ -101,6 +102,10 @@ class Settings(BaseSettings):
     # --- Demo ---
     DEMO_MODE: bool = True
 
+    # --- Optional operator-owned model registry ---
+    AI_PROVIDER_CONFIG_PATH: str = ""
+    AI_ALLOW_HOSTED: bool = False
+
     @property
     def is_production(self) -> bool:
         return self.ENVIRONMENT.lower() in {"production", "prod", "staging"}
@@ -118,6 +123,8 @@ class Settings(BaseSettings):
             problems.append("Production rate limits require Redis")
         if self.CELERY_TASK_ALWAYS_EAGER:
             problems.append("Production requires asynchronous Celery workers")
+        if self.STORAGE_AUTO_CREATE_BUCKET:
+            problems.append("Production storage buckets must be provisioned outside the application")
         if not self.CORS_ORIGINS or any(
             urlparse(origin).scheme not in {"https", "chrome-extension"}
             or not urlparse(origin).netloc or "*" in origin for origin in self.CORS_ORIGINS

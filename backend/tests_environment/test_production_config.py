@@ -26,6 +26,7 @@ def production_settings(**overrides) -> Settings:
         "S3_ACCESS_KEY": "scoped-access",
         "S3_SECRET_KEY": "scoped-secret",
         "S3_PUBLIC_ENDPOINT_URL": "https://storage.example.com",
+        "STORAGE_AUTO_CREATE_BUCKET": False,
     }
     values.update(overrides)
     return Settings(_env_file=None, **values)
@@ -44,6 +45,7 @@ def test_production_profile_accepts_explicit_non_demo_configuration() -> None:
         {"LLM_PROVIDER": "mock"},
         {"STT_PROVIDER": "mock"},
         {"EMBEDDINGS_PROVIDER": "mock"},
+        {"STORAGE_AUTO_CREATE_BUCKET": True},
         {"LLM_API_KEY": "REPLACE_WITH_REAL_KEY"},
         {"S3_SECRET_KEY": "REPLACE_WITH_SCOPED_SECRET"},
     ],

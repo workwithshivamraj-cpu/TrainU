@@ -37,6 +37,16 @@ if [[ "$MODE" == "migrate" ]]; then
     exec alembic upgrade head
 fi
 
+# Local object stores start empty on a clean installation. Bootstrap only the
+# explicitly named local bucket before the API becomes ready; never create or
+# mutate a production bucket implicitly. The worker starts after API health.
+if [[ "$MODE" == "api" && "${STORAGE_AUTO_CREATE_BUCKET:-false}" == "true" ]]; then
+    python - <<'PY'
+from app.services.storage import ensure_bucket
+ensure_bucket()
+PY
+fi
+
 case "$MODE" in
   api)
     exec uvicorn app.main:app --host 0.0.0.0 --port 8000 \

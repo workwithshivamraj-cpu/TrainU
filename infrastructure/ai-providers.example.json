@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "allow_hosted": false,
+  "endpoints": [
+    {
+      "id": "local-ollama",
+      "base_url": "http://host.docker.internal:11434/v1",
+      "deployment": "local"
+    }
+  ],
+  "profiles": [
+    {
+      "id": "qwen-local",
+      "capability": "chat",
+      "adapter": "ollama_chat_completions",
+      "deployment": "local",
+      "model_id": "qwen2.5:7b",
+      "revision": "845dbda0ea48ed749caafd9e6037047aa19acfcfd82e704d7ca97d631a0b697e",
+      "endpoint_id": "local-ollama",
+      "capabilities": ["chat-completions", "json-object"]
+    },
+    {
+      "id": "whisper-local",
+      "capability": "transcription",
+      "adapter": "faster_whisper",
+      "deployment": "local",
+      "model_id": "dropbox-dash/faster-whisper-large-v3-turbo",
+      "revision": "0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf",
+      "capabilities": ["timestamps", "language-detection"]
+    },
+    {
+      "id": "e5-local",
+      "capability": "embeddings",
+      "adapter": "sentence_transformers",
+      "deployment": "local",
+      "model_id": "intfloat/multilingual-e5-small",
+      "revision": "614241f622f53c4eeff9890bdc4f31cfecc418b3",
+      "dimension": 384,
+      "normalized": true,
+      "query_transform": "query-prefix-v1",
+      "document_transform": "passage-prefix-v1"
+    }
+  ],
+  "selection": {
+    "chat": {"mode": "manual", "profile_id": "qwen-local"},
+    "transcription": {"mode": "manual", "profile_id": "whisper-local"},
+    "embeddings": {"mode": "manual", "profile_id": "e5-local"}
+  }
+}

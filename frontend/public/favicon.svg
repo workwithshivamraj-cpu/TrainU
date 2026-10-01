@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="17" fill="#106e54"/>
-  <text x="10" y="45" font-family="ui-sans-serif,system-ui,-apple-system,sans-serif" font-size="39" font-weight="750" letter-spacing="-4" fill="#fff">t</text>
-  <text x="31" y="45" font-family="ui-sans-serif,system-ui,-apple-system,sans-serif" font-size="35" font-weight="750" letter-spacing="-3" fill="#b1efd5">u</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="TrainU">
+  <rect width="64" height="64" rx="19" fill="#08775d"/>
+  <path d="M8 18h23v7h-8v22h-7V25H8z" fill="#fff"/>
+  <path d="M34 24h7v12c0 3.1 1.4 4.8 4 4.8s4-1.7 4-4.8V24h7v12.3C56 44 51.9 49 45 49s-11-5-11-12.7z" fill="#d1fae5"/>
 </svg>

@@ -8,6 +8,11 @@ import structlog
 
 
 def configure_logging(debug: bool = True) -> None:
+    # Third-party HTTP/S3 debug logs can include signed headers, endpoint
+    # details, or request bodies. Keep application debug available without
+    # allowing client-library diagnostics to expose credentials or content.
+    for logger_name in ("boto3", "botocore", "s3transfer", "httpx", "httpcore", "urllib3"):
+        logging.getLogger(logger_name).setLevel(logging.WARNING)
     logging.basicConfig(
         format="%(message)s",
         stream=sys.stdout,

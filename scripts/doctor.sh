@@ -208,6 +208,29 @@ if [[ "$profile" == production ]]; then
   fi
 fi
 
+if [[ -n "${AI_PROVIDER_CONFIG_PATH:-}" ]]; then
+  if python3 scripts/validate_ai_provider_config.py >/dev/null 2>&1; then
+    echo 'OK   configured AI provider registry is valid'
+  elif [[ -f "${AI_PROVIDER_CONFIG_PATH}" ]] && command -v docker >/dev/null 2>&1; then
+    registry_path="${AI_PROVIDER_CONFIG_PATH}"
+    [[ "$registry_path" = /* ]] || registry_path="$PWD/$registry_path"
+    if docker compose run --rm --no-deps \
+      -v "$PWD/backend/app/core/ai_registry.py:/app/app/core/ai_registry.py:ro" \
+      -v "$PWD/backend/app/core/config.py:/app/app/core/config.py:ro" \
+      -v "$PWD/scripts/validate_ai_provider_config.py:/tmp/validate_ai_provider_config.py:ro" \
+      -v "$registry_path:/tmp/ai-providers.json:ro" \
+      --entrypoint python backend /tmp/validate_ai_provider_config.py /tmp/ai-providers.json >/dev/null 2>&1; then
+      echo 'OK   configured AI provider registry is valid (backend runtime)'
+    else
+      echo 'MISS configured AI provider registry is invalid; run scripts/validate_ai_provider_config.py for a redacted diagnostic'
+      failed=1
+    fi
+  else
+    echo 'MISS configured AI provider registry is invalid; run scripts/validate_ai_provider_config.py for a redacted diagnostic'
+    failed=1
+  fi
+fi
+
 if (( failed )); then
   echo 'Preflight incomplete. Install/fix the items above before starting this profile.'
   exit 1

@@ -16,7 +16,7 @@ interface NavItem { label: string; path: string; icon: string; minRole?: 'contri
         [ngClass]="sidebarCollapsed() ? 'w-64 lg:w-20' : 'w-64'"
         [class.-translate-x-full]="!menuOpen()" aria-label="Primary navigation" id="primary-navigation">
         <a routerLink="/dashboard" aria-label="TrainU home" class="h-24 flex items-center gap-3" [ngClass]="sidebarCollapsed() ? 'lg:justify-center lg:px-2 px-7' : 'px-7'" (click)="menuOpen.set(false)">
-          <svg class="h-9 w-9 shrink-0" viewBox="0 0 36 36" aria-hidden="true"><rect width="36" height="36" rx="12" fill="#08775d"/><path d="M9 11.5h10v3H15.5V25h-3V14.5H9v-3Z" fill="white"/><path d="M20 14.5h3v1.2c.9-1 2-1.5 3.5-1.5 2.8 0 4.5 2 4.5 5V25h-3v-5.3c0-1.7-.8-2.6-2.3-2.6-1.6 0-2.7 1.1-2.7 2.8V25h-3V14.5Z" fill="#d1fae5"/></svg>
+          <img src="favicon.svg?v=2" alt="" aria-hidden="true" class="h-9 w-9 shrink-0 rounded-[.7rem]" width="36" height="36">
           <span class="text-xl tracking-tight font-semibold" [ngClass]="sidebarCollapsed() ? 'lg:hidden' : ''">TrainU<span class="text-brand-600">.</span></span>
         </a>
         <div class="px-7 pb-3 text-[10px] font-semibold tracking-[.18em] uppercase text-slate-400" [ngClass]="sidebarCollapsed() ? 'lg:hidden' : ''">Your workspace</div>
