@@ -5,7 +5,7 @@ origin="${1:-http://localhost:4200}"
 origin="${origin%/}"
 curl --fail --silent --max-time 10 "$origin/health" >/dev/null
 curl --fail --silent --max-time 10 "$origin/" >/dev/null
-curl --fail --silent --max-time 10 "$origin/docs/launch-checklist.md" >/dev/null
+curl --fail --silent --max-time 10 "$origin/docs/product.md" >/dev/null
 headers="$(curl --silent --show-error --max-time 10 --dump-header - --output /dev/null "$origin/api/v1/auth/me")"
 if ! printf '%s\n' "$headers" | grep -Eq '^HTTP/[^ ]+ 401'; then
   echo 'Unauthenticated API request did not return 401.' >&2

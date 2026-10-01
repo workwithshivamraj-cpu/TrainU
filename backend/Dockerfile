@@ -15,7 +15,7 @@ COPY requirements.txt .
 # The CPU profile must not pull CUDA/cuDNN/NCCL merely because Torch is a
 # transitive Sentence Transformers dependency. Install its official CPU wheel
 # first; the pinned application requirements then reuse the satisfied version.
-RUN pip install --extra-index-url https://download.pytorch.org/whl/cpu "torch==2.10.0+cpu" \
+RUN pip install --extra-index-url https://download.pytorch.org/whl/cpu "torch==2.14.1+cpu" \
     && pip install -r requirements.txt
 COPY --chown=trainu:trainu . .
 RUN chmod +x docker-entrypoint.sh \

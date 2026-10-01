@@ -27,8 +27,23 @@ trap restore_writers EXIT
 # Stop writers before taking the database and object-store snapshots. Services
 # are started separately by `make up`, so fresh installs are covered too.
 docker compose stop backend worker >/dev/null 2>&1 || true
-docker compose exec -T postgres sh -ec \
-  'until pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"; do sleep 1; done'
+# pg_isready reports that the server accepts connections even while the
+# official image is still creating POSTGRES_DB and running init scripts. Wait
+# for a real query against the configured database before starting pg_dump.
+database_ready=false
+for _ in $(seq 1 60); do
+  if docker compose exec -T postgres sh -ec \
+    'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "SELECT 1"' \
+    >/dev/null 2>&1; then
+    database_ready=true
+    break
+  fi
+  sleep 1
+done
+if [[ "$database_ready" != true ]]; then
+  echo 'Configured migration database is unavailable; backup and migration are blocked.' >&2
+  exit 1
+fi
 
 docker compose exec -T postgres sh -ec \
   'pg_dump --format=custom --no-owner --no-acl -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
