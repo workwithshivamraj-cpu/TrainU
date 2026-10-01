@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "TrainU — Ask your team’s knowledge",
+  "version": "1.0.0",
+  "description": "Open selected text in your TrainU workspace. Review your question before asking.",
+  "permissions": ["contextMenus", "storage"],
+  "background": {"service_worker": "background.js", "type": "module"},
+  "action": {"default_popup": "popup.html", "default_title": "TrainU"},
+  "options_page": "options.html",
+  "content_security_policy": {"extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'"}
+}

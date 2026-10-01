@@ -1,5 +1,8 @@
 # Env
 .env
+.env.*
+!.env.example
+!.env.production.example
 *.env.local
 
 # Python
@@ -24,3 +27,8 @@ playwright-report/
 .vscode/*
 !.vscode/extensions.json
 .idea/
+
+# Generated in-app documentation
+frontend/public/docs/
+.local-backups/
+.local-models/

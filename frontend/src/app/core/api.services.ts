@@ -1,6 +1,6 @@
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpEventType, HttpResponse } from '@angular/common/http';
 import { Injectable } from '@angular/core';
-import { firstValueFrom } from 'rxjs';
+import { filter, firstValueFrom, map, tap } from 'rxjs';
 import { environment } from '../../environments/environment';
 import {
   Application,
@@ -95,8 +95,14 @@ export class SourcesService {
   get(id: string) {
     return firstValueFrom(this.http.get<SourceDetail>(`${base}/sources/${id}`));
   }
-  upload(formData: FormData) {
-    return firstValueFrom(this.http.post<SourceDetail>(`${base}/sources`, formData));
+  upload(formData: FormData, progress?: (percentage: number | null) => void) {
+    return firstValueFrom(this.http.post<SourceDetail>(`${base}/sources`, formData, {
+      observe: 'events', reportProgress: true,
+    }).pipe(
+      tap(event => { if (event.type === HttpEventType.UploadProgress) progress?.(event.total ? Math.round(100 * event.loaded / event.total) : null); }),
+      filter((event): event is HttpResponse<SourceDetail> => event instanceof HttpResponse),
+      map(event => event.body!),
+    ));
   }
   chunks(sourceId: string) {
     return firstValueFrom(this.http.get<TranscriptChunk[]>(`${base}/sources/${sourceId}/chunks`));

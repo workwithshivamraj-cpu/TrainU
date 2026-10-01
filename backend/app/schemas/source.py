@@ -73,8 +73,8 @@ class TranscriptChunkOut(BaseModel):
 
 
 class ChunkUpdate(BaseModel):
-    topic: str | None = None
-    text: str | None = None
+    topic: str | None = Field(default=None, max_length=300)
+    text: str | None = Field(default=None, min_length=1, max_length=20000)
     audience_roles: list[str] | None = None
 
 

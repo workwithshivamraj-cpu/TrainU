@@ -30,6 +30,24 @@ class TranscriptSegment:
     text: str
 
 
+def apply_time_offset(
+    segments: list[TranscriptSegment],
+    offset_seconds: float,
+    *,
+    max_duration_seconds: float | None = None,
+) -> list[TranscriptSegment]:
+    """Map request-local timestamps to source time and clamp to media bounds."""
+    shifted = []
+    for segment in segments:
+        start = max(0.0, segment.start_seconds + offset_seconds)
+        end = segment.end_seconds + offset_seconds
+        if max_duration_seconds is not None:
+            end = min(end, max_duration_seconds)
+        if end > start and segment.text.strip():
+            shifted.append(TranscriptSegment(start, end, segment.text.strip()))
+    return shifted
+
+
 class STTProvider(ABC):
     @abstractmethod
     def transcribe(self, audio_path: str, *, seed_text: str | None = None) -> list[TranscriptSegment]:
@@ -92,7 +110,7 @@ class WhisperAPISTTProvider(STTProvider):
                 )
                 for seg in data.get("segments", [])
             ]
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.error("stt_provider_error", provider=settings.STT_PROVIDER)
             raise
 

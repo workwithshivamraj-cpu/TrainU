@@ -3,35 +3,36 @@ from __future__ import annotations
 import os
 import uuid
 
-os.environ.setdefault(
-    "DATABASE_URL", "postgresql+psycopg2://trainu:trainu@localhost:5432/trainu_test"
-)
-os.environ.setdefault("REDIS_URL", "redis://localhost:6379/1")
-os.environ.setdefault("CELERY_TASK_ALWAYS_EAGER", "true")
-os.environ.setdefault("S3_ENDPOINT_URL", "http://localhost:9000")
-os.environ.setdefault("S3_PUBLIC_ENDPOINT_URL", "http://localhost:9000")
+# Validate before importing the application or constructing an engine. Test
+# fixtures drop and recreate every mapped table, so inherited runtime settings
+# must never be allowed to select their target implicitly.
+from app.core.test_environment import configure_destructive_test_environment
+
+configure_destructive_test_environment(os.environ)
+
+os.environ["CELERY_TASK_ALWAYS_EAGER"] = "true"
+os.environ["S3_ENDPOINT_URL"] = os.environ.get("TRAINU_TEST_S3_ENDPOINT_URL", "http://localhost:9000")
+os.environ["S3_PUBLIC_ENDPOINT_URL"] = os.environ["S3_ENDPOINT_URL"]
 os.environ.setdefault("S3_ACCESS_KEY", "trainu_admin")
 os.environ.setdefault("S3_SECRET_KEY", "trainu_admin_secret")
-os.environ.setdefault("S3_BUCKET", "trainu-media-test")
-os.environ.setdefault("STT_PROVIDER", "mock")
-os.environ.setdefault("LLM_PROVIDER", "mock")
-os.environ.setdefault("EMBEDDINGS_PROVIDER", "mock")
-os.environ.setdefault("SECRET_KEY", "test-secret")
+os.environ["STT_PROVIDER"] = "mock"
+os.environ["LLM_PROVIDER"] = "mock"
+os.environ["EMBEDDINGS_PROVIDER"] = "mock"
+os.environ["SECRET_KEY"] = "trainu-test-only-key-not-for-production-2026"
 
 import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker
-
+from app.core.rate_limit import rate_limiter
+from app.core.security import hash_password
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
 from app.models.enums import RoleName
 from app.models.organization import Membership, Organization
 from app.models.user import User
-from app.core.security import hash_password
-from app.core.rate_limit import rate_limiter
 from app.services.storage import ensure_bucket
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import sessionmaker
 
 TEST_DATABASE_URL = os.environ["DATABASE_URL"]
 engine = create_engine(TEST_DATABASE_URL, future=True)
@@ -45,10 +46,7 @@ def _setup_database():
         conn.commit()
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
-    try:
-        ensure_bucket()
-    except Exception:  # noqa: BLE001 - object storage optional for pure-DB tests
-        pass
+    ensure_bucket()
     yield
     Base.metadata.drop_all(bind=engine)
 

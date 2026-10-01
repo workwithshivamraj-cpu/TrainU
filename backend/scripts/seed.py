@@ -7,8 +7,9 @@
   pipeline (mock STT + mock/real embeddings) so seeded data exercises the
   exact same code path as a live upload.
 - A short synthetic placeholder video (generated with ffmpeg) uploaded to
-  object storage for each video source, long enough that every citation
-  timestamp is playable.
+  object storage for each video source. Set TRAINU_DEMO_VIDEO to an existing
+  MP4 or MOV to use a supplied file instead. Demo transcripts are scripted;
+  mock mode does not perform speech recognition.
 
 Run with:  python -m scripts.seed   (from backend/, with the venv active and
 DATABASE_URL / S3_* / etc. pointed at the local stack).
@@ -16,6 +17,7 @@ DATABASE_URL / S3_* / etc. pointed at the local stack).
 from __future__ import annotations
 
 import io
+import os
 import subprocess
 import sys
 import tempfile
@@ -45,7 +47,17 @@ def log(msg: str) -> None:
     print(f"[seed] {msg}")
 
 
-def make_placeholder_video(seconds: int = 240) -> bytes:
+def make_placeholder_video(seconds: int = 240) -> tuple[bytes, str, str]:
+    demo_video = os.environ.get("TRAINU_DEMO_VIDEO")
+    if demo_video:
+        path = Path(demo_video).expanduser()
+        extension = path.suffix.lower()
+        if extension not in {".mp4", ".mov"} or not path.is_file():
+            raise ValueError("TRAINU_DEMO_VIDEO must point to an existing .mp4 or .mov file")
+        content_type = "video/quicktime" if extension == ".mov" else "video/mp4"
+        log(f"Using supplied demo video: {path.name}")
+        return path.read_bytes(), extension, content_type
+
     with tempfile.TemporaryDirectory() as tmp:
         out = f"{tmp}/placeholder.mp4"
         subprocess.run(
@@ -58,7 +70,7 @@ def make_placeholder_video(seconds: int = 240) -> bytes:
             check=True,
             capture_output=True,
         )
-        return Path(out).read_bytes()
+        return Path(out).read_bytes(), ".mp4", "video/mp4"
 
 
 def get_or_create_user(db: Session, email: str, full_name: str, *, is_platform_admin: bool = False) -> User:
@@ -173,7 +185,21 @@ def create_source_with_video(
     transcript_key: str,
     audience_roles: list[str],
     placeholder_video: bytes,
+    video_extension: str = ".mp4",
+    video_mime_type: str = "video/mp4",
 ) -> Source:
+    source_video = os.environ.get(f"TRAINU_DEMO_VIDEO_{transcript_key.upper()}")
+    if source_video:
+        path = Path(source_video).expanduser()
+        video_extension = path.suffix.lower()
+        if video_extension not in {".mp4", ".mov"} or not path.is_file():
+            raise ValueError(
+                f"TRAINU_DEMO_VIDEO_{transcript_key.upper()} must point to an existing .mp4 or .mov file"
+            )
+        placeholder_video = path.read_bytes()
+        video_mime_type = "video/quicktime" if video_extension == ".mov" else "video/mp4"
+        log(f"Using source-specific demo video for {transcript_key}: {path.name}")
+
     source = Source(
         organization_id=org.id,
         application_id=application.id,
@@ -188,9 +214,9 @@ def create_source_with_video(
         environment=application.environment,
         audience_roles=audience_roles,
         storage_key="",
-        original_filename=f"{slugify(title)}.mp4",
+        original_filename=f"{slugify(title)}{video_extension}",
         file_size_bytes=len(placeholder_video),
-        mime_type="video/mp4",
+        mime_type=video_mime_type,
     )
     db.add(source)
     db.flush()
@@ -365,7 +391,7 @@ def main() -> None:
             log(f"{existing_sources} sources already exist; skipping source seeding")
         else:
             log("Generating placeholder training video (ffmpeg)...")
-            placeholder_video = make_placeholder_video(seconds=240)
+            placeholder_video, video_extension, video_mime_type = make_placeholder_video(seconds=240)
 
             client_accounts_module = db.query(ApplicationModule).filter(
                 ApplicationModule.application_id == client_vantage.id,
@@ -377,6 +403,7 @@ def main() -> None:
                 description="Step-by-step walkthrough of creating and submitting a new client account.",
                 feature_tag="client-account-creation", transcript_key="clientvantage_create",
                 audience_roles=["contributor", "content_owner"], placeholder_video=placeholder_video,
+                video_extension=video_extension, video_mime_type=video_mime_type,
             )
             create_source_with_video(
                 db, org=org, application=client_vantage, module=client_accounts_module, owner=content_owner,
@@ -384,6 +411,7 @@ def main() -> None:
                 description="How to change a client account's status and who must approve it.",
                 feature_tag="client-account-status", transcript_key="clientvantage_status",
                 audience_roles=["contributor", "content_owner", "viewer"], placeholder_video=placeholder_video,
+                video_extension=video_extension, video_mime_type=video_mime_type,
             )
             create_document_source(
                 db, org=org, application=client_vantage, owner=content_owner,
@@ -402,6 +430,7 @@ def main() -> None:
                 description="Step-by-step walkthrough of creating and submitting a purchase order.",
                 feature_tag="po-creation", transcript_key="supplyline_create",
                 audience_roles=["contributor", "content_owner"], placeholder_video=placeholder_video,
+                video_extension=video_extension, video_mime_type=video_mime_type,
             )
             create_source_with_video(
                 db, org=org, application=supply_line, module=po_module, owner=content_owner,
@@ -409,6 +438,7 @@ def main() -> None:
                 description="How to approve, reject, or receive a purchase order.",
                 feature_tag="po-approval", transcript_key="supplyline_status",
                 audience_roles=["contributor", "content_owner", "viewer"], placeholder_video=placeholder_video,
+                video_extension=video_extension, video_mime_type=video_mime_type,
             )
 
         log("")

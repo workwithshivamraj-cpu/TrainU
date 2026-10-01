@@ -10,18 +10,28 @@ import os
 import tempfile
 from datetime import datetime, timezone
 
+from sqlalchemy import delete, update
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.logging import get_logger
-from app.models.enums import ProcessingJobStage, ProcessingJobStatus, SourceStatus, SourceType
+from app.models.enums import (
+    ProcessingJobStage,
+    ProcessingJobStatus,
+    SourceStatus,
+    SourceType,
+)
 from app.models.source import Source, TranscriptChunk, VideoProcessingJob
 from app.services.chunking import chunk_document, chunk_transcript
 from app.services.embeddings import EmbeddingsProvider, get_embeddings_provider
-from app.services.media import extract_audio, probe_duration_seconds
+from app.services.media import extract_audio_segments, probe_duration_seconds
 from app.services.source_state import sync_chunk_status
-from app.services.stt import STTProvider, get_stt_provider
-from app.services.storage import download_bytes
-from app.services.usage import record_processed_video_minutes, record_stored_video_minutes
+from app.services.storage import download_bytes, download_file
+from app.services.stt import STTProvider, apply_time_offset, get_stt_provider
+from app.services.usage import (
+    record_processed_video_minutes,
+    record_stored_video_minutes,
+)
 
 logger = get_logger(__name__)
 
@@ -62,7 +72,7 @@ def _extract_document_text(data: bytes, filename: str) -> str:
 
             reader = PdfReader(io.BytesIO(data))
             return "\n\n".join(page.extract_text() or "" for page in reader.pages)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise PipelineError(f"Failed to parse PDF: {exc}") from exc
     if ext == ".docx":
         try:
@@ -70,7 +80,7 @@ def _extract_document_text(data: bytes, filename: str) -> str:
 
             document = docx.Document(io.BytesIO(data))
             return "\n\n".join(p.text for p in document.paragraphs if p.text.strip())
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise PipelineError(f"Failed to parse DOCX: {exc}") from exc
     raise PipelineError(f"Unsupported document type: {ext}")
 
@@ -87,21 +97,42 @@ def run_pipeline(
     stt_provider = stt_provider or get_stt_provider()
 
     try:
+        if source.status not in {SourceStatus.UPLOADED.value, SourceStatus.QUEUED.value, SourceStatus.FAILED.value, SourceStatus.PROCESSING.value}:
+            return
+        # Retrying a failed source replaces incomplete chunks, never appends duplicates.
+        db.execute(delete(TranscriptChunk).where(TranscriptChunk.source_id == source.id))
+        source.failure_reason = None
         source.status = SourceStatus.QUEUED.value
         db.commit()
         source.status = SourceStatus.PROCESSING.value
         db.commit()
 
-        data = download_bytes(source.storage_key) if source.storage_key else b""
-
         if source.source_type == SourceType.VIDEO.value:
-            chunks = _run_video_pipeline(db, source, data, stt_provider, seed_transcript_text)
+            with tempfile.TemporaryDirectory(prefix="trainu-source-") as tmp:
+                video_path = os.path.join(
+                    tmp,
+                    "input" + (os.path.splitext(source.original_filename)[1] or ".mp4"),
+                )
+                if source.storage_key:
+                    download_file(source.storage_key, video_path)
+                chunks = _run_video_pipeline(db, source, video_path, stt_provider, seed_transcript_text)
         else:
+            data = download_bytes(source.storage_key) if source.storage_key else b""
             chunks = _run_document_pipeline(db, source, data)
 
+        if not chunks:
+            raise PipelineError("No transcript or readable text was found in this source.")
+
         embed_job = _job(db, source, ProcessingJobStage.EMBEDDING)
-        for i, chunk in enumerate(chunks):
-            vector = embeddings_provider.embed(chunk.text)
+        vectors = []
+        batch_size = settings.EMBEDDING_BATCH_SIZE
+        for offset in range(0, len(chunks), batch_size):
+            vectors.extend(embeddings_provider.embed_batch(
+                [chunk.text for chunk in chunks[offset:offset + batch_size]]
+            ))
+        if len(vectors) != len(chunks):
+            raise PipelineError("The embedding provider returned an incomplete result. Retry after checking provider settings.")
+        for i, (chunk, vector) in enumerate(zip(chunks, vectors, strict=True)):
             row = TranscriptChunk(
                 organization_id=source.organization_id,
                 application_id=source.application_id,
@@ -130,28 +161,43 @@ def run_pipeline(
             record_processed_video_minutes(db, source.organization_id, source.duration_seconds / 60)
 
     except PipelineError as exc:
+        db.rollback()
         source.status = SourceStatus.FAILED.value
         source.failure_reason = str(exc)
+        _fail_running_jobs(db, source)
         db.commit()
         logger.error("pipeline_failed", source_id=str(source.id), error=str(exc))
     except Exception as exc:  # noqa: BLE001
+        db.rollback()
         source.status = SourceStatus.FAILED.value
-        source.failure_reason = f"Unexpected error: {exc}"
+        source.failure_reason = "Processing failed. Check provider configuration and retry."
+        _fail_running_jobs(db, source)
         db.commit()
         logger.error("pipeline_unexpected_error", source_id=str(source.id), error=str(exc))
 
 
-def _run_video_pipeline(db, source: Source, data: bytes, stt_provider: STTProvider, seed_transcript_text: str | None):
+def _fail_running_jobs(db: Session, source: Source) -> None:
+    db.execute(update(VideoProcessingJob).where(
+        VideoProcessingJob.source_id == source.id,
+        VideoProcessingJob.status == ProcessingJobStatus.RUNNING.value,
+    ).values(status=ProcessingJobStatus.FAILED.value, finished_at=datetime.now(timezone.utc),
+             error=source.failure_reason))
+
+
+def _run_video_pipeline(db, source: Source, video_path: str, stt_provider: STTProvider, seed_transcript_text: str | None):
     audio_job = _job(db, source, ProcessingJobStage.AUDIO_EXTRACTION)
     duration = None
     with tempfile.TemporaryDirectory() as tmp:
-        video_path = os.path.join(tmp, "input" + (os.path.splitext(source.original_filename)[1] or ".mp4"))
-        with open(video_path, "wb") as f:
-            f.write(data)
         duration = probe_duration_seconds(video_path)
-        audio_path = os.path.join(tmp, "audio.wav")
-        extracted = extract_audio(video_path, audio_path)
-        _finish_job(db, audio_job, detail="Audio extracted" if extracted else "ffmpeg unavailable; used mock audio")
+        try:
+            audio_segments = extract_audio_segments(
+                video_path,
+                tmp,
+                segment_seconds=settings.STT_AUDIO_SEGMENT_SECONDS,
+            )
+        except RuntimeError as exc:
+            raise PipelineError(str(exc)) from exc
+        _finish_job(db, audio_job, detail=f"Extracted {len(audio_segments)} audio segment(s)")
 
         if duration:
             source.duration_seconds = duration
@@ -159,9 +205,15 @@ def _run_video_pipeline(db, source: Source, data: bytes, stt_provider: STTProvid
             record_stored_video_minutes(db, source.organization_id, duration / 60)
 
         transcribe_job = _job(db, source, ProcessingJobStage.TRANSCRIPTION)
-        segments = stt_provider.transcribe(
-            audio_path if extracted else video_path, seed_text=seed_transcript_text
-        )
+        segments = []
+        for index, (audio_path, offset) in enumerate(audio_segments):
+            part = stt_provider.transcribe(
+                audio_path,
+                seed_text=seed_transcript_text if index == 0 else None,
+            )
+            segments.extend(apply_time_offset(part, offset, max_duration_seconds=duration))
+        if not segments:
+            raise PipelineError("No speech was detected in this video's audio track.")
         _finish_job(db, transcribe_job, detail=f"{len(segments)} transcript segments")
 
     chunk_job = _job(db, source, ProcessingJobStage.CHUNKING)
@@ -184,6 +236,8 @@ def _run_document_pipeline(db, source: Source, data: bytes):
 def index_approved_source(db: Session, source: Source) -> None:
     """Finalize an approved source: confirm it has chunks, mark it Indexed,
     and make sure the denormalized chunk status matches."""
+    if source.status == SourceStatus.INDEXED.value:
+        return
     if source.status != SourceStatus.APPROVED.value:
         raise PipelineError("Source must be approved before indexing")
     source.status = SourceStatus.INDEXED.value

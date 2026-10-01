@@ -1,0 +1,180 @@
+{
+  "clips": [
+    {
+      "title": "ClientVantage KT \u2014 Creating a New Client Account",
+      "application": "ClientVantage",
+      "accent": "#18A88B",
+      "steps": [
+        {
+          "title": "Open Clients",
+          "detail": "Start from the Clients workspace and review the existing account list.",
+          "tag": "FIND THE RIGHT WORKSPACE"
+        },
+        {
+          "title": "Start a new account",
+          "detail": "Choose New Client Account to open the guided account form.",
+          "tag": "CREATE A CLEAN RECORD"
+        },
+        {
+          "title": "Enter client details",
+          "detail": "Add the legal name, primary contact email, and account tier.",
+          "tag": "COMPLETE REQUIRED FIELDS"
+        },
+        {
+          "title": "Choose a template",
+          "detail": "Match the onboarding template to the client\u2019s industry.",
+          "tag": "MAKE ONBOARDING RELEVANT"
+        },
+        {
+          "title": "Save a draft",
+          "detail": "Save first so the details can be checked before submission.",
+          "tag": "KEEP WORK IN PROGRESS SAFE"
+        },
+        {
+          "title": "Review and submit",
+          "detail": "Confirm the summary, then send it to a Client Success Lead.",
+          "tag": "HAND OFF FOR APPROVAL"
+        },
+        {
+          "title": "Activate the account",
+          "detail": "After approval, the account moves from Draft to Active.",
+          "tag": "APPROVAL UNLOCKS THE NEXT STEP"
+        }
+      ],
+      "audio": "/Users/shivamwtsn/Documents/TrainU/artifacts/demo-videos/clientvantage_create-voice.aiff",
+      "output": "/Users/shivamwtsn/Documents/TrainU/artifacts/demo-videos/clientvantage_create.mp4"
+    },
+    {
+      "title": "ClientVantage KT \u2014 Updating Client Account Status",
+      "application": "ClientVantage",
+      "accent": "#18A88B",
+      "steps": [
+        {
+          "title": "Find the client",
+          "detail": "Open the account from the Clients list before changing its state.",
+          "tag": "START WITH THE ACCOUNT"
+        },
+        {
+          "title": "Edit status",
+          "detail": "Select Edit Status to review the available account states.",
+          "tag": "OPEN THE CONTROL"
+        },
+        {
+          "title": "Choose a status",
+          "detail": "Set Pending, Active, Suspended, or Closed as needed.",
+          "tag": "SELECT THE RIGHT STATE"
+        },
+        {
+          "title": "Add a closure reason",
+          "detail": "A Closed account needs a clear reason in the notes field.",
+          "tag": "MAKE THE CHANGE TRACEABLE"
+        },
+        {
+          "title": "Save changes",
+          "detail": "Apply the update and confirm the new state on the account.",
+          "tag": "COMMIT THE REQUEST"
+        },
+        {
+          "title": "Request approval",
+          "detail": "Suspended and Closed changes wait for a Client Success Lead.",
+          "tag": "SENSITIVE CHANGES NEED REVIEW"
+        },
+        {
+          "title": "Check the audit log",
+          "detail": "Every change records who acted, when, and why.",
+          "tag": "KEEP A CLEAR HISTORY"
+        }
+      ],
+      "audio": "/Users/shivamwtsn/Documents/TrainU/artifacts/demo-videos/clientvantage_status-voice.aiff",
+      "output": "/Users/shivamwtsn/Documents/TrainU/artifacts/demo-videos/clientvantage_status.mp4"
+    },
+    {
+      "title": "SupplyLine KT \u2014 Creating a Purchase Order",
+      "application": "SupplyLine",
+      "accent": "#6176D9",
+      "steps": [
+        {
+          "title": "Open Purchase Orders",
+          "detail": "Start from the Purchase Orders tab in SupplyLine.",
+          "tag": "OPEN THE PROCUREMENT FLOW"
+        },
+        {
+          "title": "Create a new PO",
+          "detail": "Choose New Purchase Order to begin a draft.",
+          "tag": "START WITH A DRAFT"
+        },
+        {
+          "title": "Select a vendor",
+          "detail": "Use the vendor directory or add a new approved vendor.",
+          "tag": "LINK THE SUPPLIER"
+        },
+        {
+          "title": "Add line items",
+          "detail": "Enter each item description, quantity, and unit price.",
+          "tag": "MAKE THE TOTAL CLEAR"
+        },
+        {
+          "title": "Set delivery details",
+          "detail": "Choose the destination and requested delivery date.",
+          "tag": "PLAN THE ARRIVAL"
+        },
+        {
+          "title": "Submit for review",
+          "detail": "Send the purchase order to a Procurement Approver.",
+          "tag": "ROUTE IT TO REVIEW"
+        },
+        {
+          "title": "Wait for approval",
+          "detail": "The status moves from Draft to Pending Approval, then Approved.",
+          "tag": "FOLLOW THE APPROVAL STATE"
+        }
+      ],
+      "audio": "/Users/shivamwtsn/Documents/TrainU/artifacts/demo-videos/supplyline_create-voice.aiff",
+      "output": "/Users/shivamwtsn/Documents/TrainU/artifacts/demo-videos/supplyline_create.mp4"
+    },
+    {
+      "title": "SupplyLine KT \u2014 Approving and Updating Purchase Order Status",
+      "application": "SupplyLine",
+      "accent": "#6176D9",
+      "steps": [
+        {
+          "title": "Open pending approvals",
+          "detail": "Choose a purchase order from the review queue.",
+          "tag": "START IN THE RIGHT QUEUE"
+        },
+        {
+          "title": "Review the order",
+          "detail": "Check vendor, line items, and total against the budget.",
+          "tag": "VERIFY BEFORE YOU DECIDE"
+        },
+        {
+          "title": "Approve or reject",
+          "detail": "Approve to proceed, or reject with a reason for the requester.",
+          "tag": "MAKE THE DECISION CLEAR"
+        },
+        {
+          "title": "Record the outcome",
+          "detail": "An approval moves the order to Approved; a rejection is recorded.",
+          "tag": "KEEP STATUS ACCURATE"
+        },
+        {
+          "title": "Receive the goods",
+          "detail": "When items arrive, open the Receiving tab.",
+          "tag": "CLOSE THE LOOP"
+        },
+        {
+          "title": "Mark as Received",
+          "detail": "Update the status after receipt is confirmed.",
+          "tag": "COMPLETE THE ORDER"
+        },
+        {
+          "title": "Respect role controls",
+          "detail": "Procurement Approvers or Supply Chain Systems admins can decide.",
+          "tag": "THE RIGHT ROLE TAKES ACTION"
+        }
+      ],
+      "audio": "/Users/shivamwtsn/Documents/TrainU/artifacts/demo-videos/supplyline_status-voice.aiff",
+      "output": "/Users/shivamwtsn/Documents/TrainU/artifacts/demo-videos/supplyline_status.mp4"
+    }
+  ]
+}

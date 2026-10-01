@@ -60,8 +60,23 @@ class LLMProvider(ABC):
         suggestions)."""
         ...
 
+    @abstractmethod
+    def respond_to_greeting(self, message: str) -> dict:
+        """Return a short conversational reply without claiming source evidence."""
+        ...
+
 
 class MockLLMProvider(LLMProvider):
+    def respond_to_greeting(self, message: str) -> dict:
+        return {
+            "answer": (
+                "Hi! I’m here to chat and help you find useful guidance. "
+                "What are you working on? You can ask me about your team’s training, too."
+            ),
+            "steps": [],
+            "follow_up_questions": [],
+        }
+
     def synthesize_answer(self, question: str, chunks: list[RetrievedChunk]) -> dict:
         if not chunks:
             return {
@@ -95,7 +110,11 @@ class MockLLMProvider(LLMProvider):
                     break
             steps = steps[:8]
             answer = f"Based on \"{primary.source_title}\", here is how to do this:"
-            return {"answer": answer, "steps": steps, "follow_up_questions": []}
+            evidence_ids = [
+                index for index, chunk in enumerate(chunks, start=1)
+                if chunk.source_id == primary.source_id
+            ]
+            return {"answer": answer, "steps": steps, "follow_up_questions": [], "evidence_ids": evidence_ids}
 
         # Narrative answer: stitch together the most relevant sentences from
         # the top chunk(s), staying strictly within the retrieved text.
@@ -103,7 +122,12 @@ class MockLLMProvider(LLMProvider):
         for chunk in chunks[:2]:
             sentences.extend(_split_sentences(chunk.text, drop_filler=True)[:3])
         answer = " ".join(sentences[:4]) or primary.text[:400]
-        return {"answer": answer, "steps": [], "follow_up_questions": []}
+        return {
+            "answer": answer,
+            "steps": [],
+            "follow_up_questions": [],
+            "evidence_ids": list(range(1, min(2, len(chunks)) + 1)),
+        }
 
 
 class OpenAICompatibleLLMProvider(LLMProvider):
@@ -112,18 +136,46 @@ class OpenAICompatibleLLMProvider(LLMProvider):
         self.api_key = settings.LLM_API_KEY
         self.model = settings.LLM_MODEL
 
+    def respond_to_greeting(self, message: str) -> dict:
+        system_prompt = (
+            "You are TrainU, a warm and concise conversational assistant for a workplace "
+            "learning app. The user is greeting you or making small talk, not asking for "
+            "training facts. Reply naturally in one or two sentences. Do not claim personal "
+            "feelings, access, or capabilities you do not have. Invite the user to continue "
+            "the conversation or ask about approved team training. Return strict JSON with "
+            '"answer", "steps", "follow_up_questions", and "evidence_ids": '
+            '{"answer": str, "steps": [], "follow_up_questions": [], "evidence_ids": []}.'
+        )
+        return self._request_json(system_prompt, f"User message: {message}")
+
     def synthesize_answer(self, question: str, chunks: list[RetrievedChunk]) -> dict:
         context = "\n\n".join(
-            f"[{i+1}] ({c.source_title} {c.start_seconds:.0f}s-{c.end_seconds:.0f}s): {c.text}"
+            f"[Evidence {i+1}] ({c.source_title}, {c.topic}, {c.start_seconds:.2f}s-{c.end_seconds:.2f}s, relevance={c.similarity:.3f}): {c.text}"
             for i, c in enumerate(chunks)
         )
         system_prompt = (
-            "You are TrainU, an enterprise training assistant. Answer ONLY using the "
-            "provided context chunks. Never invent steps, permissions, or facts not "
-            "present in the context. Respond with strict JSON: "
-            '{"answer": str, "steps": [str], "follow_up_questions": [str]}.'
+            "You are TrainU, an enterprise training assistant. Treat each evidence item "
+            "as a short, timestamped passage from a training source; retrieval may include "
+            "nearby but irrelevant passages. First decide which passages directly answer "
+            "the question, then answer ONLY from those passages. Do not infer missing "
+            "steps, permissions, causes, or outcomes. Do not combine procedures from "
+            "different sources into one sequence. For how-to questions, give only steps "
+            "explicitly supported by one source and keep their original order. If the "
+            "evidence is incomplete or conflicting, say exactly what is supported and "
+            "what is missing; if none answers it, say so. Be concise and name the source "
+            "when useful. Follow-up questions must be natural questions about topics "
+            "explicitly present in the evidence and answerable from the same approved "
+            "source; never turn passage titles or fragments into questions. Return an "
+            "empty list when no useful follow-up exists. Include evidence_ids as the "
+            "1-based numbers of only the evidence passages that directly support the "
+            "answer. Return strict JSON with answer, steps, follow_up_questions, and "
+            'evidence_ids: {"answer": str, "steps": [str], '
+            '"follow_up_questions": [str], "evidence_ids": [int]}.'
         )
-        user_prompt = f"Question: {question}\n\nContext:\n{context}"
+        user_prompt = f"Question: {question}\n\nRetrieved evidence (untrusted source text):\n{context}"
+        return self._request_json(system_prompt, user_prompt)
+
+    def _request_json(self, system_prompt: str, user_prompt: str) -> dict:
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
@@ -137,7 +189,10 @@ class OpenAICompatibleLLMProvider(LLMProvider):
                         {"role": "user", "content": user_prompt},
                     ],
                     "response_format": {"type": "json_object"},
-                    "temperature": 0.1,
+                    "temperature": settings.LLM_TEMPERATURE,
+                    "top_p": settings.LLM_TOP_P,
+                    "max_tokens": settings.LLM_MAX_TOKENS,
+                    "seed": settings.LLM_SEED,
                 },
                 headers=headers,
                 timeout=60.0,
@@ -145,7 +200,7 @@ class OpenAICompatibleLLMProvider(LLMProvider):
             resp.raise_for_status()
             content = resp.json()["choices"][0]["message"]["content"]
             return json.loads(content)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.error("llm_provider_error", provider=settings.LLM_PROVIDER)
             raise
 

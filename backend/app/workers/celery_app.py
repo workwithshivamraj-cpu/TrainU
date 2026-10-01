@@ -19,4 +19,11 @@ celery_app.conf.update(
     enable_utc=True,
     task_always_eager=settings.CELERY_TASK_ALWAYS_EAGER,
     task_eager_propagates=True,
+    worker_prefetch_multiplier=1,
+    task_acks_late=True,
+    task_reject_on_worker_lost=True,
+    task_soft_time_limit=3300,
+    task_time_limit=3600,
+    broker_transport_options={"visibility_timeout": 7200},
+    result_expires=86400,
 )

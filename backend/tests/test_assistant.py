@@ -40,6 +40,19 @@ def test_no_answer_when_no_sources_exist(client, db):
     assert body["citations"] == []
     assert body["confidence"] == "none"
     assert "could not find an approved source" in body["answer"]
+    assert body["inference_provider"] == "none"
+    assert body["inference_model"] is None
+
+
+def test_greeting_gets_a_conversational_reply_without_a_source(client, db):
+    headers, _org = _content_owner_headers(client, db, "greeting@example.com")
+    resp = client.post("/api/v1/assistant/ask", json={"question": "Hi"}, headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "Hi!" in body["answer"]
+    assert "what are you working on" in body["answer"].lower()
+    assert body["citations"] == []
+    assert body["inference_provider"] == "mock"
 
 
 def test_ask_returns_well_formed_citation_schema(client, db):
@@ -52,6 +65,8 @@ def test_ask_returns_well_formed_citation_schema(client, db):
     assert resp.status_code == 200
     body = resp.json()
     assert body["confidence"] in {"high", "medium", "low", "none"}
+    assert body["inference_provider"] == "mock"
+    assert body["inference_model"] is None
     assert len(body["citations"]) > 0
     for citation in body["citations"]:
         assert {

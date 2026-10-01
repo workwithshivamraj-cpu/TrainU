@@ -14,4 +14,4 @@ from app.models.organization import (  # noqa: F401
 )
 from app.models.source import Source, TranscriptChunk, VideoProcessingJob  # noqa: F401
 from app.models.usage import UsageMetric  # noqa: F401
-from app.models.user import User  # noqa: F401
+from app.models.user import AuthSession, User  # noqa: F401

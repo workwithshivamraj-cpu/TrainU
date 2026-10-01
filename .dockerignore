@@ -1,0 +1,15 @@
+.git
+**/.env
+**/.env.*
+!.env.example
+!.env.production.example
+**/node_modules
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/.angular
+**/dist
+**/test-results
+**/playwright-report
+motion
+.DS_Store

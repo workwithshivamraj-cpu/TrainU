@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
@@ -18,6 +18,7 @@ from app.models.assistant import (
 )
 from app.models.enums import AuditAction, FeedbackRating
 from app.models.organization import Membership
+from app.models.application import Application
 from app.schemas.assistant import (
     AskRequest,
     AskResponse,
@@ -46,9 +47,15 @@ def ask(
         settings.RATE_LIMIT_ASSISTANT_PER_MINUTE,
     )
 
+    if payload.application_id:
+        application = db.get(Application, payload.application_id)
+        if application is None or application.organization_id != membership.organization_id:
+            raise HTTPException(404, detail="Application not found")
+
     if payload.conversation_id:
         conversation = db.get(AssistantConversation, payload.conversation_id)
-        if conversation is None or conversation.organization_id != membership.organization_id:
+        if (conversation is None or conversation.organization_id != membership.organization_id
+                or conversation.user_id != membership.user_id):
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Conversation not found")
     else:
         conversation = AssistantConversation(
@@ -143,11 +150,15 @@ def ask(
             for r in result.related_clips
         ],
         follow_up_questions=result.follow_up_questions,
+        inference_provider=result.inference_provider,
+        inference_model=result.inference_model,
     )
 
 
 @router.get("/conversations", response_model=list[ConversationOut])
 def list_conversations(
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     membership: Membership = Depends(get_current_membership), db: Session = Depends(get_db)
 ):
     stmt = (
@@ -158,6 +169,7 @@ def list_conversations(
             AssistantConversation.user_id == membership.user_id,
         )
         .order_by(AssistantConversation.created_at.desc())
+        .limit(limit).offset(offset)
     )
     return db.scalars(stmt).all()
 
@@ -171,6 +183,9 @@ def submit_feedback(
     message = db.get(AssistantMessage, payload.message_id)
     if message is None or message.organization_id != membership.organization_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Message not found")
+    conversation = db.get(AssistantConversation, message.conversation_id)
+    if conversation is None or conversation.user_id != membership.user_id:
+        raise HTTPException(404, detail="Message not found")
     if payload.rating not in {r.value for r in FeedbackRating}:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid rating")
     feedback = Feedback(
@@ -190,7 +205,8 @@ def submit_feedback(
 def list_feedback(
     membership: Membership = Depends(get_current_membership), db: Session = Depends(get_db)
 ):
-    stmt = select(Feedback).where(Feedback.organization_id == membership.organization_id).order_by(
+    stmt = select(Feedback).where(Feedback.organization_id == membership.organization_id,
+                                  Feedback.user_id == membership.user_id).order_by(
         Feedback.created_at.desc()
     )
-    return db.scalars(stmt).all()
+    return db.scalars(stmt.limit(100)).all()

@@ -1,219 +1,76 @@
-# Operations
+# Operations and recovery
 
-## Prerequisites
+See [runtime profiles](runtime-profiles.md) for the deterministic Compose demo, host-run real-AI proof of concept and production template, including startup/preflight commands and their current limits.
 
-- Docker + Docker Compose (recommended path), **or**
-- Python 3.12+, Node 20+, PostgreSQL 16 with `pgvector`, Redis, `ffmpeg` on `PATH` for running services natively.
+## Private local LLM for development
 
-## Local setup (Docker Compose)
+The assistant supports Ollama through its OpenAI-compatible local API. Install Ollama from its official distribution, pull an instruction model whose license fits your use, and point the API at `http://127.0.0.1:11434/v1`. For the TrainU demo, `qwen2.5:7b` is installed locally and served by Ollama; the assistant sends prompts and retrieved approved passages to that loopback endpoint only. This keeps this development inference request on the same machine. The model is Apache-2.0 licensed according to the Ollama library entry. Treat model files and prompts as local data, and bind Ollama to loopback unless there is an intentionally secured private deployment.
 
-```bash
-cp .env.example .env
-docker compose up --build
-docker compose run --rm backend python -m scripts.seed
-```
+Example backend environment:
 
-Services and ports (all overridable in `.env`):
-
-| Service | Port | Notes |
-|---|---|---|
-| `frontend` | 4200 | nginx serving the built Angular app |
-| `backend` | 8000 | FastAPI; `/api/v1/docs` for Swagger |
-| `worker` | — | Celery worker, no exposed port |
-| `postgres` | 5432 | `pgvector/pgvector:pg16` image |
-| `redis` | 6379 | Celery broker/result backend |
-| `minio` | 9000 / 9001 | S3 API / web console |
-
-`backend` and `worker` share one Docker image (`backend/Dockerfile`); the
-entrypoint script picks a mode (`api` | `worker` | `seed`) from the compose
-`command:`. Both wait for Postgres to accept connections and run
-`alembic upgrade head` before starting, so migrations are always applied
-before the app serves traffic — no manual migration step needed on a normal
-`docker compose up`.
-
-To re-seed from scratch: stop the stack, remove the `trainu_postgres_data`
-and `trainu_minio_data` volumes (`docker compose down -v`), then repeat the
-two commands above.
-
-## Running tests
-
-```bash
-# Backend — needs a local Postgres+pgvector reachable at the URL in
-# backend/tests/conftest.py (defaults to postgresql+psycopg2://trainu:trainu@localhost:5432/trainu_test)
-cd backend
-createdb trainu_test  # once
-psql trainu_test -c "CREATE EXTENSION IF NOT EXISTS vector;"
-pytest -q
-
-# Frontend unit tests
-cd frontend
-npm test
-
-# Frontend e2e (needs the full stack running at http://localhost:4200 / :8000, seeded)
-npm run e2e
-```
-
-Backend tests run with `CELERY_TASK_ALWAYS_EAGER=true` (set automatically in
-`tests/conftest.py`), so `.delay()` calls execute synchronously in-process —
-no Redis or separate worker required to run the suite.
-
-## Demo credentials
-
-See the table in `README.md`. All demo users share the password
-`TrainU_Demo123!`; change this before using the seed script against anything
-beyond a local/demo database.
-
-## Environment variables
-
-All configuration is environment-driven (`backend/app/core/config.py`);
-`.env.example` documents every variable with safe local defaults. Highlights:
-
-- **`SECRET_KEY`** — JWT signing key. The example value is explicitly
-  insecure; generate a real one for anything beyond local demo use.
-- **`DATABASE_URL` / `REDIS_URL` / `S3_*`** — infrastructure connection
-  strings. Docker Compose overrides the hostnames to the in-network service
-  names (`postgres`, `redis`, `minio`); the same `.env` also works for
-  running the backend natively against `localhost`.
-- **`S3_PUBLIC_ENDPOINT_URL`** — the URL a *browser* can reach MinIO at,
-  which differs from the URL the backend container uses internally
-  (`http://minio:9000` vs `http://localhost:9000`). Presigned URLs are
-  rewritten to this host so video playback works from the user's browser.
-- **`STT_PROVIDER`**, **`LLM_PROVIDER`**, **`EMBEDDINGS_PROVIDER`** — each
-  independently `mock` or a real provider; see below.
-- **`RAG_MIN_SIMILARITY`**, **`RAG_MEDIUM_CONFIDENCE_SIMILARITY`**,
-  **`RAG_HIGH_CONFIDENCE_SIMILARITY`** — cosine-similarity thresholds tuned
-  for the mock embeddings provider's geometry (see below for what to change
-  when switching to real embeddings).
-
-## Mock mode vs real AI/transcription
-
-### Mock mode (default)
-
-- `STT_PROVIDER=mock`: `app/services/stt.py::MockSTTProvider` splits a
-  transcript (seeded, or a short generic placeholder for arbitrary uploads
-  with no seed text) into evenly-timed sentences. No audio is actually
-  decoded — `ffmpeg` still runs to extract the audio track and probe real
-  duration, but transcription itself is deterministic.
-- `LLM_PROVIDER=mock`, `EMBEDDINGS_PROVIDER=mock`:
-  `app/services/embeddings.py::MockEmbeddingsProvider` is a stopword-filtered
-  hashed bag-of-words embedding (dimension `EMBEDDING_DIM`, default 384);
-  `app/services/llm.py::MockLLMProvider` builds answers only from retrieved
-  chunk text (chronologically ordered, single-source for "how do I"
-  questions). This is what the seed data, the automated tests, and the demo
-  flow are tuned against.
-
-### Real providers
-
-Set independently per concern — you can mix, e.g. real embeddings with the
-mock LLM:
-
-```bash
-# OpenAI-compatible
-STT_PROVIDER=whisper_api
-STT_API_BASE_URL=https://api.openai.com/v1
-STT_API_KEY=sk-...
-STT_MODEL=whisper-1
-
-LLM_PROVIDER=openai
-LLM_BASE_URL=https://api.openai.com/v1
-LLM_API_KEY=sk-...
-LLM_MODEL=gpt-4o-mini
-
-EMBEDDINGS_PROVIDER=openai
-EMBEDDINGS_BASE_URL=https://api.openai.com/v1
-EMBEDDINGS_API_KEY=sk-...
-EMBEDDINGS_MODEL=text-embedding-3-small
-EMBEDDING_DIM=1536
-```
-
-```bash
-# Ollama (local, no API key)
+```dotenv
 LLM_PROVIDER=ollama
-LLM_BASE_URL=http://localhost:11434/v1
-LLM_MODEL=llama3.1
-
+LLM_BASE_URL=http://127.0.0.1:11434/v1
+LLM_API_KEY=ollama
+LLM_MODEL=qwen2.5:7b
 EMBEDDINGS_PROVIDER=ollama
-EMBEDDINGS_BASE_URL=http://localhost:11434/v1
-EMBEDDINGS_MODEL=nomic-embed-text
-EMBEDDING_DIM=768
+EMBEDDINGS_BASE_URL=http://127.0.0.1:11434/v1
+EMBEDDINGS_API_KEY=ollama
+EMBEDDINGS_MODEL=all-minilm
+EMBEDDING_DIM=384
 ```
 
-**Important — changing `EMBEDDING_DIM` requires a migration.** The
-`pgvector` column is created with a fixed dimension
-(`transcript_chunks.embedding VECTOR(384)` in the initial migration). If you
-switch to a real embeddings model with a different output dimension, you
-must:
+The local host demo uses Qwen2.5 7B (its observed digest and generation parameters are in `infrastructure/model-lock.json`) for answer generation and all-minilm for semantic retrieval; the installed all-minilm model returns 384-dimensional vectors to match the existing pgvector column. The assistant UI labels each result with the provider/model returned by the API. It shows “No model call” when no approved evidence passes retrieval, and handles greetings as conversation instead of searching for a training record. After changing embedding models, re-embed every searchable chunk with the selected model before querying; never mix vectors from different embedding spaces. The local demo's seeded transcript/STT remains scripted. Ollama is a local inference option, not a production security guarantee: restrict network access, protect model endpoints and data, review license/weights, and test output quality for your workload.
 
-1. Write a new Alembic migration that alters the column to the new
-   dimension (`ALTER TABLE transcript_chunks ALTER COLUMN embedding TYPE
-   vector(N)`) and rebuilds the IVFFlat index.
-2. Re-run ingestion for existing sources (or re-run `scripts/seed.py` against
-   a fresh database) so every chunk's embedding is regenerated with the new
-   model — old and new embeddings are not comparable.
-3. Re-tune `RAG_MIN_SIMILARITY` / `RAG_MEDIUM_CONFIDENCE_SIMILARITY` /
-   `RAG_HIGH_CONFIDENCE_SIMILARITY` for the new model's similarity
-   distribution; the defaults are tuned for the mock provider's geometry and
-   real embedding models typically cluster at different cosine-similarity
-   ranges.
+## Ownership
 
-The real STT/LLM/embeddings adapters (`WhisperAPISTTProvider`,
-`OpenAICompatibleLLMProvider`, `OpenAICompatibleEmbeddingsProvider`) are
-fully implemented against standard OpenAI-compatible HTTP contracts, but are
-not exercised by the automated test suite (no network access in CI/this
-environment) — test them against your provider before relying on them in
-production.
+Before launch, name a service owner, release owner, security contact and backup/recovery operator. Put actual contact paths in the customer support surface. Assign alert coverage and escalation windows; no 24/7 support or SLA is implied by this repository.
 
-## Database overview
+## Health and observability
 
-See `docs/architecture.md` for the full table list. Migrations live in
-`backend/alembic/versions/`; the initial migration
-(`3fc92ab4e5e4_initial_schema.py`) creates the `vector` extension, every
-table, all foreign-key/tenant-scoping indexes, and the IVFFlat cosine index
-on `transcript_chunks.embedding`. Generate new migrations with:
+API `/health` is process liveness; `/health/ready` checks backing dependencies. Frontend `/health` verifies static serving. Worker health uses Celery inspection. Probe ready instances before sending traffic; use queue backlog age and successful task completions to detect a worker that is alive but stalled.
+
+Ship application/container logs to access-controlled storage. Measure request count, 4xx/5xx rates, latency percentiles, auth/rate-limit failures, database pool/connection saturation, Redis memory/queue age, ingestion stage durations/failures, object-store errors, provider rate limits/cost, and filesystem scratch pressure. Alert thresholds must come from staging/pilot baselines. Avoid recording credentials, presigned URL query strings, invitation tokens or customer transcript/question bodies in general logs. Distributed tracing/central metrics collection require deployment integration.
+
+## Release and rollback
+
+1. Identify the commit and immutable image digests; require passing CI and launch gate evidence.
+2. Confirm backup freshness and one successful isolated restore drill. Assess schema compatibility with the previous application version.
+3. Run the migration as a single release job. Do not start a migration concurrently on every API/worker replica.
+4. Roll out API/worker/frontend, check readiness and execute a known tenant workflow.
+5. If a regression occurs, halt rollout. For a compatible schema, restore the prior image pair. For an incompatible schema, use the tested forward-fix or coordinated database restore plan; `alembic downgrade` is not an automatic safe rollback.
+6. Record the incident, affected tenants, data impact, actions and validation results.
+
+When redeploying a Compose frontend after backend container IP changes, recreate/reload Nginx so its upstream DNS resolution is refreshed. A production orchestrator should provide a stable service address.
+
+## Backup policy to configure
+
+Use managed PostgreSQL point-in-time recovery plus encrypted, access-controlled backups in an independent failure domain. Enable private object-store versioning and lifecycle policies. Database metadata alone cannot restore videos/documents. Redis durability protects queued work but is not the authoritative content backup. Set retention and recovery objectives with the actual customer contract; there are no measured RPO/RTO guarantees yet.
+
+The repository includes `scripts/backup-db.sh` for custom-format logical backups and a checksum. It reads libpq environment settings (`PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGSSLMODE`, `PGSSLROOTCERT`, `PGPASSFILE`) so passwords do not appear in the process argument list. Use a PostgreSQL client compatible with the server major version. Run it from a protected operator host and upload the output to encrypted off-host backup storage.
 
 ```bash
-cd backend
-alembic revision --autogenerate -m "describe the change"
+bash scripts/backup-db.sh /protected/trainu-backups
 ```
 
-Always review autogenerated migrations before applying — Alembic doesn't
-know about `pgvector`-specific index types, so IVFFlat/HNSW indexes need to
-be added by hand (see the initial migration for the pattern).
+## Restore drill
 
-## Production hardening and scaling considerations
+1. Create an isolated empty database/network and an isolated restoration of the matching media bucket versions. Keep live applications disconnected from the restore target.
+2. Verify backup checksum, decrypt through the approved secret flow, and restore with `PG*` settings pointing at the isolated database. `scripts/restore-db.sh` refuses a populated public schema and requires `TRAINU_RESTORE_CONFIRM` equal to the target database name.
+3. Run the matching application image and appropriate migrations. Validate tenant/member counts, membership denial across two tenants, source/chunk counts, approval state and a known citation/playback. Verify all expected media objects exist.
+4. Measure the recovery duration and record the recovery point. Decide whether the measured result satisfies the agreed objective.
+5. A live cutover requires a coordinated write freeze, worker drain, latest recoverable data/object state, endpoint switch, functional verification and controlled resume. Avoid two active writers against divergent restored/live databases.
 
-This MVP is deliberately scoped for a correct, demonstrable single-tenant-host
-deployment. Before production rollout:
+Never run the backend test suite against a customer database: its fixture drops and recreates tables.
 
-- **Secrets**: rotate `SECRET_KEY` to a real random value, injected via your
-  platform's secret manager — never commit `.env`.
-- **Rate limiting**: `app/core/rate_limit.py` is an in-process sliding
-  window, which only works correctly with a single API replica. Move it to
-  Redis (`INCR` + `EXPIRE` per key) before running more than one backend
-  instance.
-- **Object storage**: MinIO is fine for local/self-hosted demo use; for
-  production, point `S3_*` at a real S3-compatible bucket with lifecycle
-  policies matching each organization's `retention_days`, and consider
-  virus/content scanning on upload before a file is queued for processing.
-- **STT/LLM cost & latency**: real transcription and LLM calls are
-  synchronous within a Celery task; for large videos, consider chunked/async
-  provider APIs and backpressure (Celery concurrency limits, task time
-  limits) so one huge upload can't starve the worker pool.
-- **pgvector index tuning**: the IVFFlat index's `lists` parameter (100 in
-  the initial migration) should scale with row count — rebuild with a larger
-  `lists` value as `transcript_chunks` grows past ~100k rows, or migrate to
-  an HNSW index (`pgvector` ≥ 0.5) for better recall/latency at scale.
-- **Email delivery**: invitations currently return a token for the inviter
-  to share manually (shown in the UI as a copyable link) — wire up a
-  transactional email provider before relying on invites at scale.
-- **Observability**: `structlog` output is currently console-rendered;
-  ship it to a log aggregator, and add request tracing/metrics
-  (e.g. OpenTelemetry) for latency and error-rate visibility into the RAG
-  pipeline specifically, since that's the highest-variance path.
-- **Horizontal scaling**: the API is stateless (JWT auth, no server-side
-  sessions) so it scales horizontally behind a load balancer once the rate
-  limiter is Redis-backed; the Celery worker scales by adding replicas and
-  tuning `--concurrency`.
-- **TLS**: terminate TLS in front of both `frontend` and `backend` in any
-  non-local deployment; `CORS_ORIGINS` should be locked to the real frontend
-  origin(s).
+## Failed or interrupted ingestion
+
+Inspect the source failure reason and stage jobs, correlate worker/provider logs, and check object existence. Fix the underlying provider, storage, file-format or capacity issue. Content owners can retry a failed source where the retry endpoint/UI is available. A task stuck in `processing` after an abrupt worker failure requires inspection before recovery; do not blindly queue duplicates or mark it approved. A complete reconciliation/outbox/dead-letter service remains a scale workstream. Archive an unusable source and upload a corrected replacement when appropriate.
+
+For provider outages, limit new ingestion, preserve originals and avoid repeated paid API retries. For Redis failure, restore broker availability and inspect tasks/status before resuming workers. For a database outage, fail readiness, stop write traffic and follow the managed database failover procedure.
+
+## Security incident and data requests
+
+Revoke the affected integration credentials, restrict affected access, retain necessary audit evidence and determine tenant/data exposure. Rotate application signing secrets only with an understood session invalidation plan. Coordinate customer communication through the service owner's approved process. Restore normal operation after containment and verification, then add a regression test or control for the cause.
+
+Retention days are metadata until a scheduled deletion mechanism is implemented. Account/organization export and deletion currently require an authenticated support request, identity/authority checks and an operator procedure covering SQL records, object versions, provider copies and backup retention. Do not promise instant erasure or an automatic retention policy. Document the actual completed action and exceptions for each request.

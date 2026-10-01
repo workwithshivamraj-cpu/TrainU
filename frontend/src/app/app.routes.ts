@@ -13,6 +13,10 @@ export const routes: Routes = [
     loadComponent: () => import('./features/auth/register.component').then((m) => m.RegisterComponent),
   },
   {
+    path: 'guide',
+    loadComponent: () => import('./features/help/help.component').then(m => m.HelpComponent),
+  },
+  {
     path: 'accept-invite',
     loadComponent: () =>
       import('./features/auth/accept-invite.component').then((m) => m.AcceptInviteComponent),
@@ -47,6 +51,7 @@ export const routes: Routes = [
       },
       {
         path: 'sources/upload',
+        canActivate: [roleGuard('contributor')],
         loadComponent: () =>
           import('./features/sources/source-upload.component').then((m) => m.SourceUploadComponent),
       },
@@ -54,6 +59,10 @@ export const routes: Routes = [
         path: 'sources/:id',
         loadComponent: () =>
           import('./features/sources/source-detail.component').then((m) => m.SourceDetailComponent),
+      },
+      {
+        path: 'help',
+        loadComponent: () => import('./features/help/help.component').then(m => m.HelpComponent),
       },
       {
         path: 'usage',

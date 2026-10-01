@@ -2,6 +2,7 @@ import { CommonModule } from '@angular/common';
 import { Component, OnInit, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
+import { errorMessage } from '../../core/error-message';
 import { AuthService } from '../../core/auth.service';
 import { SourcesService } from '../../core/api.services';
 import { SourceSummary, SourceStatus } from '../../core/models';
@@ -12,12 +13,12 @@ import { SourceSummary, SourceStatus } from '../../core/models';
   imports: [CommonModule, FormsModule, RouterLink],
   template: `
     <div class="space-y-6">
-      <div class="flex items-center justify-between">
+      <div class="flex flex-wrap gap-3 items-center justify-between">
         <div>
-          <h1 class="text-xl font-semibold text-slate-900">Sources</h1>
-          <p class="text-sm text-slate-500">KT videos and documents, and their processing/review status.</p>
+          <h1 class="text-3xl font-semibold text-slate-900">Knowledge library</h1>
+          <p class="text-sm text-slate-500">The videos and documents your team learns from.</p>
         </div>
-        @if (auth.hasAtLeastRole('content_owner')) {
+        @if (auth.hasAtLeastRole('contributor')) {
           <a routerLink="/sources/upload" class="btn-primary">+ Upload source</a>
         }
       </div>
@@ -32,6 +33,7 @@ import { SourceSummary, SourceStatus } from '../../core/models';
         }
       </div>
 
+      @if (error()) { <p class="notice" role="alert">{{ error() }} <button class="underline ml-2" (click)="reload()">Retry</button></p> }
       @if (loading()) {
         <p class="text-sm text-slate-500">Loading…</p>
       } @else if (sources().length === 0) {
@@ -39,8 +41,8 @@ import { SourceSummary, SourceStatus } from '../../core/models';
           <p>No sources match this filter yet.</p>
         </div>
       } @else {
-        <div class="card overflow-hidden">
-          <table class="w-full text-sm">
+        <div class="card overflow-x-auto">
+          <table class="w-full min-w-[600px] text-sm">
             <thead class="bg-slate-50 text-xs uppercase text-slate-500">
               <tr>
                 <th class="text-left px-4 py-2">Title</th>
@@ -75,6 +77,8 @@ import { SourceSummary, SourceStatus } from '../../core/models';
 export class SourceListComponent implements OnInit {
   sources = signal<SourceSummary[]>([]);
   loading = signal(true);
+  error = signal<string | null>(null);
+  private loadVersion = 0;
   statusFilter: SourceStatus | '' = '';
 
   statusFilters: { value: SourceStatus | ''; label: string }[] = [
@@ -99,9 +103,10 @@ export class SourceListComponent implements OnInit {
   }
 
   async reload() {
-    this.loading.set(true);
-    this.sources.set(await this.sourcesService.list(this.statusFilter ? { status: this.statusFilter } : {}).catch(() => []));
-    this.loading.set(false);
+    const version = ++this.loadVersion; this.loading.set(true); this.error.set(null);
+    try { const sources = await this.sourcesService.list(this.statusFilter ? { status: this.statusFilter } : {}); if (version === this.loadVersion) this.sources.set(sources); }
+    catch (e) { if (version === this.loadVersion) this.error.set(errorMessage(e, 'The knowledge library could not be loaded.')); }
+    finally { if (version === this.loadVersion) this.loading.set(false); }
   }
 
   statusClass(status: string): string {

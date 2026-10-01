@@ -1,15 +1,31 @@
 name: trainu
 
+x-backend: &backend
+  build:
+    context: ./backend
+  env_file: .env
+  environment: &backend-environment
+    DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-trainu}:${POSTGRES_PASSWORD:-trainu}@postgres:5432/${POSTGRES_DB:-trainu}
+    REDIS_URL: redis://redis:6379/0
+    RATE_LIMIT_BACKEND: redis
+    S3_ENDPOINT_URL: http://minio:9000
+    S3_PUBLIC_ENDPOINT_URL: http://localhost:${MINIO_PORT:-9000}
+    TRAINU_MIGRATION_BACKUP_CONFIRMED: ${TRAINU_MIGRATION_BACKUP_CONFIRMED:-}
+    FORWARDED_ALLOW_IPS: "*"
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: ["ALL"]
+  volumes:
+    - trainu_model_cache:/var/cache/trainu/huggingface
+
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    image: pgvector/pgvector:pg16@sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-trainu}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-trainu}
       POSTGRES_DB: ${POSTGRES_DB:-trainu}
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+    ports: ["127.0.0.1:${POSTGRES_PORT:-5432}:5432"]
     volumes:
       - trainu_postgres_data:/var/lib/postgresql/data
       - ./infrastructure/postgres/init-test-db.sql:/docker-entrypoint-initdb.d/init-test-db.sql:ro
@@ -20,10 +36,11 @@ services:
       retries: 20
 
   redis:
-    image: redis:7-alpine
+    image: redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
     restart: unless-stopped
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
+    ports: ["127.0.0.1:${REDIS_PORT:-6379}:6379"]
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    volumes: ["trainu_redis_data:/data"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -31,77 +48,96 @@ services:
       retries: 20
 
   minio:
-    image: minio/minio:latest
+    # Keep the service name for the existing S3_ENDPOINT_URL and volume wiring.
+    # RustFS is an S3-compatible local development server; production uses the
+    # externally managed S3-compatible endpoint from docker-compose.production.yml.
+    image: rustfs/rustfs:1.0.0@sha256:8cc9801755448b71a786705ce76692c77e14936cccd87cf2fc31842e58f4d1ff
     restart: unless-stopped
-    command: server /data --console-address ":9001"
+    command: ["rustfs"]
     environment:
-      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-trainu_admin}
-      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-trainu_admin_secret}
+      RUSTFS_VOLUMES: /data
+      RUSTFS_ADDRESS: 0.0.0.0:9000
+      RUSTFS_CONSOLE_ADDRESS: 0.0.0.0:9001
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_ACCESS_KEY: ${S3_ACCESS_KEY:-trainu_admin}
+      RUSTFS_SECRET_KEY: ${S3_SECRET_KEY:-trainu_admin_secret}
     ports:
-      - "${MINIO_PORT:-9000}:9000"
-      - "${MINIO_CONSOLE_PORT:-9001}:9001"
-    volumes:
-      - trainu_minio_data:/data
+      - "127.0.0.1:${MINIO_PORT:-9000}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes: ["trainu_minio_data:/data"]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/health/ready"]
       interval: 5s
       timeout: 5s
       retries: 20
 
+  mailpit:
+    image: ghcr.io/axllent/mailpit:v1.31.3@sha256:ed9b00c609e77e99c79b93f1178255ebc271868920f2c69a8d166bd5634ed10d
+    profiles: [local-tools]
+    restart: unless-stopped
+    environment:
+      MP_SMTP_BIND_ADDR: 0.0.0.0:1025
+      MP_UI_BIND_ADDR: 0.0.0.0:8025
+      MP_DISABLE_VERSION_CHECK: "true"
+    ports:
+      - "127.0.0.1:1025:1025"
+      - "127.0.0.1:8025:8025"
+
+  clamav:
+    image: clamav/clamav:1.5.4@sha256:ebec5bc138401b36ae987caa1a3fa3c3b2a21ed3d51f0bfa5852825e663e67b0
+    profiles: [scanner]
+    restart: unless-stopped
+    volumes:
+      - trainu_clamav_data:/var/lib/clamav
+
+  migrate:
+    <<: *backend
+    command: ["migrate"]
+    restart: "no"
+    healthcheck: {disable: true}
+    depends_on:
+      postgres: {condition: service_healthy}
+
   backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    <<: *backend
     restart: unless-stopped
     command: ["api"]
-    env_file:
-      - .env
-    environment:
-      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-trainu}:${POSTGRES_PASSWORD:-trainu}@postgres:5432/${POSTGRES_DB:-trainu}
-      REDIS_URL: redis://redis:6379/0
-      S3_ENDPOINT_URL: http://minio:9000
-      S3_PUBLIC_ENDPOINT_URL: http://localhost:${MINIO_PORT:-9000}
-    ports:
-      - "${BACKEND_PORT:-8000}:8000"
+    ports: ["127.0.0.1:${BACKEND_PORT:-8000}:8000"]
     depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+      minio: {condition: service_healthy}
 
   worker:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    <<: *backend
     restart: unless-stopped
     command: ["worker"]
-    env_file:
-      - .env
-    environment:
-      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-trainu}:${POSTGRES_PASSWORD:-trainu}@postgres:5432/${POSTGRES_DB:-trainu}
-      REDIS_URL: redis://redis:6379/0
-      S3_ENDPOINT_URL: http://minio:9000
-      S3_PUBLIC_ENDPOINT_URL: http://localhost:${MINIO_PORT:-9000}
+    stop_grace_period: 2m
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.workers.celery_app inspect ping -d celery@$$HOSTNAME --timeout=5 | grep -q pong"]
+      interval: 60s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
     depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+      minio: {condition: service_healthy}
 
   frontend:
     build:
       context: .
       dockerfile: frontend/Dockerfile
     restart: unless-stopped
-    ports:
-      - "${FRONTEND_PORT:-4200}:80"
+    ports: ["127.0.0.1:${FRONTEND_PORT:-4200}:8080"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
     depends_on:
-      - backend
+      backend: {condition: service_healthy}
 
 volumes:
   trainu_postgres_data:
+  trainu_redis_data:
   trainu_minio_data:
+  trainu_model_cache:
+  trainu_clamav_data:

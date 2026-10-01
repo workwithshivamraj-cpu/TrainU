@@ -152,6 +152,8 @@ export interface AskResponse {
   citations: Citation[];
   related_clips: RelatedClip[];
   follow_up_questions: string[];
+  inference_provider?: string;
+  inference_model?: string | null;
   /** Client-side only: tracks the feedback the user gave for this answer. */
   __feedback?: 'helpful' | 'not_helpful';
 }

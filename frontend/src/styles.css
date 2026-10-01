@@ -3,37 +3,26 @@
 @tailwind utilities;
 
 @layer base {
-  html, body {
-    height: 100%;
-  }
-  body {
-    @apply bg-slate-50 text-slate-900 antialiased;
-  }
+  html, body { min-height: 100%; }
+  body { @apply bg-slate-50 text-slate-900 antialiased; font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  h1, h2, h3 { letter-spacing: -.025em; }
+  button, a, input, textarea, select { -webkit-tap-highlight-color: transparent; }
+  button:focus-visible, a:focus-visible { @apply outline-none ring-2 ring-brand-500 ring-offset-2; }
+  ::selection { @apply bg-brand-100 text-brand-900; }
 }
-
 @layer components {
-  .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-md px-3.5 py-2 text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-brand-500 disabled:opacity-50 disabled:cursor-not-allowed;
-  }
-  .btn-primary {
-    @apply btn bg-brand-600 text-white hover:bg-brand-700;
-  }
-  .btn-secondary {
-    @apply btn bg-white text-slate-700 border border-slate-300 hover:bg-slate-50;
-  }
-  .btn-danger {
-    @apply btn bg-red-600 text-white hover:bg-red-700;
-  }
-  .card {
-    @apply bg-white border border-slate-200 rounded-lg shadow-sm;
-  }
-  .input {
-    @apply block w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm placeholder:text-slate-400 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500;
-  }
-  .label {
-    @apply block text-sm font-medium text-slate-700 mb-1;
-  }
-  .badge {
-    @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium;
-  }
+  .btn { @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-brand-500 disabled:opacity-50 disabled:cursor-not-allowed; }
+  .btn-primary { @apply btn bg-brand-700 text-white hover:bg-brand-800 shadow-sm; }
+  .btn-secondary { @apply btn bg-white text-slate-700 border border-slate-200 hover:bg-slate-50; }
+  .btn-danger { @apply btn bg-red-600 text-white hover:bg-red-700; }
+  .card { @apply bg-white border border-slate-200/80 rounded-2xl; box-shadow: 0 3px 16px -12px rgb(15 23 42 / 20%); }
+  .input { @apply block w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm placeholder:text-slate-400 focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-100 disabled:bg-slate-50; }
+  .label { @apply block text-sm font-medium text-slate-700 mb-1.5; }
+  .badge { @apply inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium; }
+  .eyebrow { @apply text-xs uppercase font-semibold tracking-widest text-brand-700; }
+  .notice { @apply rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900; }
+  .auth-background { background: radial-gradient(ellipse at 5% 5%, #d7f8e8 0%, transparent 48%), radial-gradient(ellipse at 95% 90%, #e6f5ef 0%, transparent 45%), #f8faf9; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }

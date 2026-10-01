@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import uuid
+import hashlib
+import hmac
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
@@ -20,7 +23,7 @@ from app.core.security import (
 from app.db.session import get_db
 from app.models.enums import AuditAction, InvitationStatus, RoleName
 from app.models.organization import Invitation, Membership, Organization, OrganizationPlan
-from app.models.user import User
+from app.models.user import AuthSession, User
 from app.schemas.auth import LoginRequest, RefreshRequest, RegisterRequest, TokenResponse, UserOut
 from app.services.audit import record_audit_event
 
@@ -55,12 +58,15 @@ def register(payload: RegisterRequest, request: Request, db: Session = Depends(g
 
     if payload.invitation_token:
         invitation = db.scalars(
-            select(Invitation).where(Invitation.token == payload.invitation_token)
+            select(Invitation).where(Invitation.token == payload.invitation_token).with_for_update()
         ).first()
-        if not invitation or invitation.status != InvitationStatus.PENDING.value:
+        if (not invitation or invitation.status != InvitationStatus.PENDING.value
+                or invitation.expires_at <= datetime.now(timezone.utc)):
             raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid or expired invitation")
         if invitation.email.lower() != payload.email.lower():
             raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invitation email mismatch")
+        if invitation.role == RoleName.PLATFORM_ADMIN.value:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid invitation role")
         membership = Membership(
             user_id=user.id, organization_id=invitation.organization_id, role=invitation.role
         )
@@ -106,7 +112,7 @@ def _user_out(user: User) -> UserOut:
                 "role": m.role,
             }
             for m in user.memberships
-            if m.is_active
+            if m.is_active and m.organization.is_active
         ],
     )
 
@@ -125,27 +131,73 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
         db, action=AuditAction.LOGIN, actor_user_id=user.id, resource_type="user",
         resource_id=str(user.id), ip_address=client_key(request),
     )
+    session = AuthSession(
+        id=uuid.uuid4(), user_id=user.id, refresh_token_hash="",
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=settings.REFRESH_TOKEN_EXPIRE_MINUTES),
+    )
+    db.add(session)
+    tokens = _session_tokens(user, session)
+    db.commit()
+    return tokens
+
+
+def _token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def _session_tokens(user: User, session: AuthSession) -> TokenResponse:
+    refresh_token = create_refresh_token(str(user.id), session_id=str(session.id))
+    session.refresh_token_hash = _token_hash(refresh_token)
     return TokenResponse(
-        access_token=create_access_token(str(user.id)),
-        refresh_token=create_refresh_token(str(user.id)),
+        access_token=create_access_token(str(user.id), session_id=str(session.id)),
+        refresh_token=refresh_token,
     )
 
 
 @router.post("/refresh", response_model=TokenResponse)
-def refresh(payload: RefreshRequest, db: Session = Depends(get_db)):
+def refresh(payload: RefreshRequest, request: Request, db: Session = Depends(get_db)):
+    rate_limiter.check(f"refresh:{client_key(request)}", settings.RATE_LIMIT_AUTH_PER_MINUTE)
     token_data = decode_token(payload.refresh_token)
     if token_data is None or token_data.type != "refresh":
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired refresh token")
     try:
         user = db.get(User, uuid.UUID(token_data.sub))
+        session_id = uuid.UUID(token_data.sid)
     except (ValueError, TypeError):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid token subject")
     if user is None or not user.is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
-    return TokenResponse(
-        access_token=create_access_token(str(user.id)),
-        refresh_token=create_refresh_token(str(user.id)),
-    )
+    # Serialize rotations across all API replicas. Replaying an old refresh token
+    # revokes the family, including access tokens issued by its successor.
+    session = db.scalars(select(AuthSession).where(AuthSession.id == session_id).with_for_update()).first()
+    if (session is None or session.user_id != user.id or session.revoked_at is not None
+            or session.expires_at <= datetime.now(timezone.utc)):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Session expired or revoked")
+    if not hmac.compare_digest(session.refresh_token_hash, _token_hash(payload.refresh_token)):
+        session.revoked_at = datetime.now(timezone.utc)
+        db.commit()
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Refresh token reuse detected; sign in again")
+    tokens = _session_tokens(user, session)
+    db.commit()
+    return tokens
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+def logout(payload: RefreshRequest, db: Session = Depends(get_db)):
+    token_data = decode_token(payload.refresh_token)
+    if token_data is None or token_data.type != "refresh":
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired refresh token")
+    try:
+        session_id = uuid.UUID(token_data.sid)
+        user_id = uuid.UUID(token_data.sub)
+    except (ValueError, TypeError):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid session")
+    session = db.scalars(select(AuthSession).where(AuthSession.id == session_id).with_for_update()).first()
+    if session is not None and session.user_id == user_id and session.revoked_at is None:
+        session.revoked_at = datetime.now(timezone.utc)
+        record_audit_event(db, action=AuditAction.LOGOUT, actor_user_id=user_id,
+                           resource_type="session", resource_id=str(session_id), commit=False)
+        db.commit()
 
 
 @router.get("/me", response_model=UserOut)

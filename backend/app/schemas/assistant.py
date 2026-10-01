@@ -42,6 +42,8 @@ class AskResponse(BaseModel):
     citations: list[CitationOut] = []
     related_clips: list[RelatedClipOut] = []
     follow_up_questions: list[str] = []
+    inference_provider: str = "none"
+    inference_model: str | None = None
 
 
 class FeedbackCreate(BaseModel):

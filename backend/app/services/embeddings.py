@@ -102,13 +102,21 @@ class OpenAICompatibleEmbeddingsProvider(EmbeddingsProvider):
         try:
             resp = httpx.post(
                 f"{self.base_url}/embeddings",
-                json={"model": self.model, "input": texts},
+                json={"model": self.model, "input": texts, **(
+                    {"dimensions": settings.EMBEDDING_DIM}
+                    if settings.EMBEDDINGS_PROVIDER == "openai" and self.model.startswith("text-embedding-3") else {}
+                )},
                 headers=headers,
                 timeout=30.0,
             )
             resp.raise_for_status()
             data = resp.json()
-            return [item["embedding"] for item in data["data"]]
+            vectors = [item["embedding"] for item in sorted(data["data"], key=lambda item: item.get("index", 0))]
+            if len(vectors) != len(texts) or any(len(v) != settings.EMBEDDING_DIM for v in vectors):
+                raise ValueError("Embedding provider returned an unexpected vector dimension or count")
+            if any(not math.isfinite(float(n)) for v in vectors for n in v):
+                raise ValueError("Embedding provider returned a non-finite vector")
+            return vectors
         except Exception:  # noqa: BLE001
             logger.error("embeddings_provider_error", provider=settings.EMBEDDINGS_PROVIDER)
             raise

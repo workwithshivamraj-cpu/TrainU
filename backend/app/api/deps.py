@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 from collections.abc import Generator
 
 from fastapi import Depends, Header, HTTPException, status
@@ -11,7 +12,7 @@ from app.core.security import decode_token
 from app.db.session import get_db
 from app.models.enums import ROLE_RANK, RoleName
 from app.models.organization import Membership
-from app.models.user import User
+from app.models.user import AuthSession, User
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -27,11 +28,16 @@ def get_current_user(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
     try:
         user_id = uuid.UUID(payload.sub)
+        session_id = uuid.UUID(payload.sid)
     except (ValueError, TypeError):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid token subject")
     user = db.get(User, user_id)
     if user is None or not user.is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
+    session = db.get(AuthSession, session_id)
+    if (session is None or session.user_id != user_id or session.revoked_at is not None
+            or session.expires_at <= datetime.now(timezone.utc)):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Session expired or revoked")
     return user
 
 
@@ -55,14 +61,14 @@ def get_current_membership(
         except ValueError:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid X-Org-Id header")
         membership = next(
-            (m for m in user.memberships if m.organization_id == org_uuid and m.is_active), None
+            (m for m in user.memberships if m.organization_id == org_uuid and m.is_active and m.organization.is_active), None
         )
         if membership is None:
             # 404, not 403: never confirm/deny existence of orgs the caller can't access.
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Organization not found")
         return membership
 
-    active_memberships = [m for m in user.memberships if m.is_active]
+    active_memberships = [m for m in user.memberships if m.is_active and m.organization.is_active]
     if len(active_memberships) == 1:
         return active_memberships[0]
     if not active_memberships:

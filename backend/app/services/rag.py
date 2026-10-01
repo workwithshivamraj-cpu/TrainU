@@ -17,6 +17,7 @@ Strict flow, mirrored exactly by the tests:
 """
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass
 
@@ -32,6 +33,11 @@ from app.services.llm import LLMProvider, RetrievedChunk, get_llm_provider
 NO_ANSWER_MESSAGE = (
     "I could not find an approved source that answers this question. "
     "Try another term, select the relevant application, or contact the application owner."
+)
+GREETING_PATTERN = re.compile(
+    r"^(?:hi|hello|hey|good morning|good afternoon|good evening)(?:\s+(?:there|trainu|everyone))?"
+    r"[!.?\s]*$|^(?:how are you(?: doing)?|what's up|who are you|what can you do|thanks|thank you)[!.?\s]*$",
+    re.IGNORECASE,
 )
 
 RETRIEVABLE_STATUSES = (SourceStatus.APPROVED.value, SourceStatus.INDEXED.value)
@@ -66,6 +72,8 @@ class AssistantAnswerResult:
     citations: list[CitationResult]
     related_clips: list[RelatedClip]
     follow_up_questions: list[str]
+    inference_provider: str = "none"
+    inference_model: str | None = None
 
 
 def _cosine_similarity_expr(chunk_embedding_col, query_vector: list[float]):
@@ -95,6 +103,7 @@ def retrieve_chunks(
         .join(Source, Source.id == TranscriptChunk.source_id)
         .where(
             TranscriptChunk.organization_id == organization_id,
+            Source.organization_id == organization_id,
             TranscriptChunk.source_status.in_(RETRIEVABLE_STATUSES),
             Source.status.in_(RETRIEVABLE_STATUSES),
         )
@@ -110,8 +119,11 @@ def retrieve_chunks(
             (TranscriptChunk.audience_roles == [])
             | TranscriptChunk.audience_roles.any(role)
         )
+        stmt = stmt.where((Source.audience_roles == []) | Source.audience_roles.any(role))
 
-    stmt = stmt.order_by(similarity.desc()).limit(top_k)
+    # Keep the ORDER BY in pgvector's distance form so PostgreSQL can use the
+    # matching vector_cosine_ops ANN index for nearest-neighbor retrieval.
+    stmt = stmt.order_by(TranscriptChunk.embedding.cosine_distance(query_vector)).limit(top_k)
     rows = db.execute(stmt).all()
     return [(row[0], row[1], float(row[2])) for row in rows]
 
@@ -141,6 +153,20 @@ def answer_question(
     embeddings_provider: EmbeddingsProvider | None = None,
     llm_provider: LLMProvider | None = None,
 ) -> AssistantAnswerResult:
+    if GREETING_PATTERN.fullmatch(question.strip()):
+        provider = llm_provider or get_llm_provider()
+        reply = provider.respond_to_greeting(question.strip())
+        return AssistantAnswerResult(
+            answer=reply.get("answer", "Hi! What can I help you with today?"),
+            steps=[],
+            confidence=ConfidenceLevel.NONE,
+            citations=[],
+            related_clips=[],
+            follow_up_questions=[],
+            inference_provider=settings.LLM_PROVIDER,
+            inference_model=settings.LLM_MODEL if settings.LLM_PROVIDER != "mock" else None,
+        )
+
     results = retrieve_chunks(
         db,
         organization_id=organization_id,
@@ -162,6 +188,8 @@ def answer_question(
             citations=[],
             related_clips=[],
             follow_up_questions=[],
+            inference_provider="none",
+            inference_model=None,
         )
 
     provider = llm_provider or get_llm_provider()
@@ -181,12 +209,26 @@ def answer_question(
     ]
     synthesized = provider.synthesize_answer(question, llm_chunks)
 
+    selected_evidence = synthesized.get("evidence_ids")
+    if isinstance(selected_evidence, list):
+        selected_indexes = {
+            evidence_id for evidence_id in selected_evidence
+            if isinstance(evidence_id, int) and not isinstance(evidence_id, bool)
+            and 1 <= evidence_id <= len(relevant)
+        }
+    else:
+        selected_indexes = set()
+    citation_candidates = (
+        [item for index, item in enumerate(relevant, start=1) if index in selected_indexes]
+        or relevant[:1]
+    )
+
     # Citations are built strictly from our own retrieval metadata (never
     # from LLM output), capped at 3 distinct sources, so they can never
     # reference another org or an unapproved source.
     citations: list[CitationResult] = []
     seen_sources: set[uuid.UUID] = set()
-    for chunk, source, sim in relevant:
+    for chunk, source, sim in citation_candidates:
         if len(citations) >= 3:
             break
         citations.append(
@@ -224,21 +266,15 @@ def answer_question(
         if len(related_clips) >= 3:
             break
 
-    follow_ups = synthesized.get("follow_up_questions") or _default_follow_ups(relevant)
+    follow_ups = synthesized.get("follow_up_questions") or []
 
     return AssistantAnswerResult(
         answer=synthesized.get("answer", NO_ANSWER_MESSAGE),
         steps=synthesized.get("steps", []),
-        confidence=_confidence_for(relevant[0][2]),
+        confidence=_confidence_for(citation_candidates[0][2]),
         citations=citations,
         related_clips=related_clips,
         follow_up_questions=follow_ups[:3],
+        inference_provider=settings.LLM_PROVIDER,
+        inference_model=settings.LLM_MODEL if settings.LLM_PROVIDER != "mock" else None,
     )
-
-
-def _default_follow_ups(relevant: list[tuple[TranscriptChunk, Source, float]]) -> list[str]:
-    topics = []
-    for chunk, _source, _sim in relevant[1:4]:
-        if chunk.topic and chunk.topic not in topics:
-            topics.append(chunk.topic)
-    return [f"What about {t.rstrip('…')}?" for t in topics]

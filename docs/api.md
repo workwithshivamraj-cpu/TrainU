@@ -1,98 +1,56 @@
-# API reference
+# API guide
 
-Full interactive OpenAPI/Swagger docs are served by the running backend at
-`GET /api/v1/docs` (raw schema at `/api/v1/openapi.json`). This document is a
-narrative map of the surface; treat Swagger as the source of truth for exact
-request/response schemas.
+The running API's `/api/v1/docs` and `/api/v1/openapi.json` define exact schemas. This guide describes the supported workflow. In a deployed frontend, use same-origin `/api/v1`; local direct development uses `http://localhost:8000/api/v1`.
 
-Base URL (local): `http://localhost:8000/api/v1`
+## Authentication and tenancy
 
-## Authentication
+Register/login returns bearer credentials. Send `Authorization: Bearer <access_token>` and `X-Org-Id: <organization_id>` on organization requests. A token alone does not grant membership in arbitrary organizations. Sign-in, refresh and registration are unauthenticated entry points with validation/rate limits; refresh requires a valid refresh credential. Do not put bearer credentials in URLs, analytics or logs.
 
-Every endpoint below `/auth/register`, `/auth/login`, and `/auth/refresh`
-requires an `Authorization: Bearer <access_token>` header. Endpoints scoped
-to an organization additionally require an `X-Org-Id: <organization_id>`
-header identifying which of the caller's memberships is active — omit it
-only if the user belongs to exactly one organization, in which case it's
-inferred.
-
-| Method | Path | Auth | Notes |
-|---|---|---|---|
-| POST | `/auth/register` | none | Creates a user; optionally creates a new org (becomes `org_admin`) or accepts an invitation token |
-| POST | `/auth/login` | none | Returns `{access_token, refresh_token}`. Rate-limited. |
-| POST | `/auth/refresh` | none (refresh token in body) | Rotates the access token |
-| GET | `/auth/me` | user | Current user + all active memberships |
-
-## Organizations
-
-| Method | Path | Min role | Notes |
-|---|---|---|---|
-| GET | `/organizations/current` | any member | Active org details |
-| PATCH | `/organizations/current` | org_admin | Update name, logo, retention days |
-| GET | `/organizations/current/members` | any member | Roster |
-| PATCH | `/organizations/current/members/{id}/role` | org_admin | Change a member's role; audit-logged |
-| DELETE | `/organizations/current/members/{id}` | org_admin | Deactivate a membership |
-| POST | `/organizations/current/invitations` | org_admin | Create an invite (email + role); returns a token used to build `/accept-invite?token=...` |
-| GET | `/organizations/current/invitations` | org_admin | List invites |
-| POST | `/organizations/current/invitations/{id}/revoke` | org_admin | Revoke a pending invite |
-| POST | `/organizations/invitations/accept` | user | Accept an invite by token (adds/reactivates membership) |
-
-## Applications
-
-| Method | Path | Min role | Notes |
-|---|---|---|---|
-| GET | `/applications` | any member | List, with modules |
-| POST | `/applications` | content_owner | Create |
-| GET | `/applications/{id}` | any member | 404 if it belongs to another org |
-| PATCH | `/applications/{id}` | content_owner | Update fields |
-| DELETE | `/applications/{id}` | org_admin | Delete |
-| POST | `/applications/{id}/modules` | content_owner | Add a module |
-
-## Sources (KT videos & documents)
-
-| Method | Path | Min role | Notes |
-|---|---|---|---|
-| GET | `/sources` | any member | Filter by `status_filter`, `application_id` |
-| POST | `/sources` | content_owner | Multipart upload (`file`, `title`, metadata fields); validates type/size, stores to MinIO, kicks off the Celery pipeline |
-| GET | `/sources/{id}` | any member | Includes processing jobs + a presigned `playback_url` |
-| GET | `/sources/{id}/chunks` | any member | Transcript/document chunks in order |
-| PATCH | `/sources/{id}/chunks/{chunk_id}` | content_owner | Edit chunk text/topic/audience roles |
-| POST | `/sources/{id}/approve` | content_owner | Only valid from `awaiting_review`; moves to `approved` then a background task indexes it to `indexed` |
-| POST | `/sources/{id}/archive` | content_owner | Removes it from retrieval |
-| DELETE | `/sources/{id}` | org_admin | Only valid once `archived` (409 otherwise) |
-
-Allowed file types: `.mp4 .mov .m4v .webm` (video, up to `MAX_VIDEO_SIZE_MB`)
-and `.pdf .docx .md .txt` (documents, up to `MAX_DOCUMENT_SIZE_MB`).
-
-## Assistant (Ask TrainU)
-
-| Method | Path | Min role | Notes |
-|---|---|---|---|
-| POST | `/assistant/ask` | any member | `{question, application_id?, application_version?, environment?, conversation_id?}` → grounded answer + citations. Rate-limited. |
-| GET | `/assistant/conversations` | any member | Caller's own conversation history in this org |
-| POST | `/assistant/feedback` | any member | `{message_id, rating: helpful|not_helpful, comment?}` |
-| GET | `/assistant/feedback` | any member | All feedback in the org |
-
-See `docs/architecture.md` for the full retrieval → synthesis → citation
-pipeline behind `/assistant/ask`.
-
-## Usage & audit
-
-| Method | Path | Min role | Notes |
-|---|---|---|---|
-| GET | `/usage/summary` | any member | `?days=30`; stored/processed video minutes, questions asked, active users, daily breakdown |
-| GET | `/audit-log` | org_admin | `?limit=100&action=...`; login, invites, uploads, processing, approvals, deletions, role changes, assistant answers |
-
-## Health
-
-| Method | Path | Auth |
+| Method | Resource | Purpose |
 |---|---|---|
-| GET | `/health` | none | Liveness check (outside the `/api/v1` prefix) |
+| POST | `/auth/register` | Create identity/workspace or accept invitation during signup |
+| POST | `/auth/login` | Authenticate |
+| POST | `/auth/refresh` | Exchange a refresh credential |
+| GET | `/auth/me` | Current identity and memberships |
+| GET/PATCH | `/organizations/current` | Read/update current workspace; update needs admin |
+| GET | `/organizations/current/members` | Authorized roster |
+| PATCH/DELETE | `/organizations/current/members/{id}` | Member administration; role update uses `/role` suffix |
+| GET/POST | `/organizations/current/invitations` | Admin invitation workflow |
+| POST | `/organizations/current/invitations/{id}/revoke` | Admin revoke |
+| POST | `/organizations/invitations/accept` | Accept for authenticated matching identity |
 
-## Error shape
+## Content and questions
 
-All errors are `{"detail": "..."}` with a standard HTTP status code:
-`400` validation, `401` unauthenticated/expired token, `403` insufficient
-role, `404` not found *or* not accessible to the caller's organization
-(deliberately indistinguishable), `409` invalid state transition,
-`429` rate limited.
+| Method | Resource | Permission / result |
+|---|---|---|
+| GET | `/applications` or `/applications/{id}` | Organization member |
+| POST/PATCH | `/applications` or `/applications/{id}` | Content owner |
+| DELETE | `/applications/{id}` | Org admin |
+| POST | `/applications/{id}/modules` | Content owner |
+| GET | `/sources` or `/sources/{id}` | Tenant/audience/status-filtered content; detail may return short-lived playback URL |
+| POST | `/sources` | Contributor or content owner multipart upload |
+| GET | `/sources/{id}/chunks` | Authorized source transcript |
+| PATCH | `/sources/{id}/chunks/{chunk_id}` | Content owner correction |
+| POST | `/sources/{id}/approve` | Review-to-approved transition |
+| POST | `/sources/{id}/archive` | Removes retrieval eligibility |
+| POST | `/sources/{id}/retry` | Content owner retries a failed source |
+| DELETE | `/sources/{id}` | Org admin, archived source only |
+| POST | `/assistant/ask` | Question and optional app/version/environment/conversation filters |
+| GET | `/assistant/conversations` | Caller's conversations in the organization |
+| POST/GET | `/assistant/feedback` | Feedback submission/authorized review |
+| GET | `/usage/summary` | Usage rollups |
+| GET | `/audit-log` | Org admin audit entries |
+
+An assistant response includes answer, steps, confidence label, citations with source/chunk IDs, quoted evidence and timestamps, related clips and follow-up questions. Clients must render returned text as text, not execute it as HTML or instructions. Resolve playback from the authorized source endpoint instead of constructing object URLs.
+
+## Uploads and statuses
+
+Supported extensions: video `.mp4`, `.mov`, `.m4v`, `.webm`; documents `.pdf`, `.docx`, `.md`, `.txt`. Size limits are deployment settings. The development profile allows larger files than the initial production template. Allowed extension/MIME checks do not constitute a malware scanner.
+
+The normal flow is `uploaded → queued → processing → awaiting_review → approved → indexed`. Failures enter `failed`; approved content can be archived. Invalid state changes return conflict. Follow the operations guide for interrupted processing; never call undocumented endpoints or manually force a source to indexed.
+
+## Health and failures
+
+`/health` is liveness. `/health/ready` checks configured backing dependencies and is the API load-balancer probe. Both are outside `/api/v1`. Nginx also has its own `/health` endpoint for static serving.
+
+Clients should handle 401 (sign in), 403 (insufficient permission), 404 (missing/inaccessible), 409 (state conflict), 413 (upload too large), 422 (validation), 429 (rate limit) and 503 (temporary dependency failure). Error bodies typically have `detail`; FastAPI field-validation details may be an array. Respect retry headers when present. Retry reads with bounded backoff; do not automatically replay uploads or other non-idempotent mutations.

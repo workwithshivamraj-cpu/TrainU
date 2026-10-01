@@ -3,8 +3,8 @@ from __future__ import annotations
 import os
 import uuid
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from sqlalchemy import select, or_, and_
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_membership, require_role
@@ -16,7 +16,10 @@ from app.models.enums import (
     RoleName,
     SourceStatus,
     SourceType,
+    ApplicationEnvironment,
+    ROLE_RANK,
 )
+from app.models.application import Application, ApplicationModule
 from app.models.organization import Membership
 from app.models.source import Source, TranscriptChunk
 from app.schemas.source import (
@@ -64,39 +67,86 @@ def _get_org_source(db: Session, organization_id: uuid.UUID, source_id: uuid.UUI
     return source
 
 
+def _source_visibility(membership: Membership):
+    if ROLE_RANK.get(RoleName(membership.role), -1) >= ROLE_RANK[RoleName.CONTENT_OWNER]:
+        return True
+    published = and_(
+        Source.status.in_([SourceStatus.APPROVED.value, SourceStatus.INDEXED.value]),
+        or_(Source.audience_roles == [], Source.audience_roles.any(membership.role)),
+    )
+    if membership.role == RoleName.CONTRIBUTOR.value:
+        return or_(published, Source.content_owner_id == membership.user_id)
+    return published
+
+
+def _get_visible_source(db: Session, membership: Membership, source_id: uuid.UUID) -> Source:
+    source = db.scalars(select(Source).where(
+        Source.id == source_id, Source.organization_id == membership.organization_id,
+        _source_visibility(membership),
+    )).first()
+    if source is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Source not found")
+    return source
+
+
 @router.get("", response_model=list[SourceOut])
 def list_sources(
     status_filter: str | None = None,
     application_id: uuid.UUID | None = None,
+    limit: int = Query(100, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     membership: Membership = Depends(get_current_membership),
     db: Session = Depends(get_db),
 ):
-    stmt = select(Source).where(Source.organization_id == membership.organization_id)
+    stmt = select(Source).where(Source.organization_id == membership.organization_id,
+                                _source_visibility(membership))
     if status_filter:
         stmt = stmt.where(Source.status == status_filter)
     if application_id:
         stmt = stmt.where(Source.application_id == application_id)
-    stmt = stmt.order_by(Source.created_at.desc())
+    stmt = stmt.order_by(Source.created_at.desc(), Source.id).offset(offset).limit(limit)
     return db.scalars(stmt).all()
 
 
 @router.post("", response_model=SourceDetailOut, status_code=status.HTTP_201_CREATED)
 def upload_source(
     file: UploadFile = File(...),
-    title: str = Form(...),
-    description: str = Form(""),
+    title: str = Form(..., min_length=1, max_length=300),
+    description: str = Form("", max_length=10000),
     application_id: uuid.UUID | None = Form(None),
     module_id: uuid.UUID | None = Form(None),
-    feature_tag: str = Form(""),
-    application_version: str = Form(""),
+    feature_tag: str = Form("", max_length=200),
+    application_version: str = Form("", max_length=50),
     environment: str | None = Form(None),
     audience_roles: str = Form(""),  # comma-separated
-    membership: Membership = Depends(require_role(RoleName.CONTENT_OWNER)),
+    membership: Membership = Depends(require_role(RoleName.CONTRIBUTOR)),
     db: Session = Depends(get_db),
 ):
-    source_type = _classify(file.filename)
-    data = file.file.read()
-    size_mb = len(data) / (1024 * 1024)
+    filename = (file.filename or "").replace("\\", "/").rsplit("/", 1)[-1]
+    if not filename or len(filename) > 300 or not title.strip():
+        raise HTTPException(400, detail="A valid filename and title are required")
+    source_type = _classify(filename)
+    if application_id:
+        application = db.get(Application, application_id)
+        if application is None or application.organization_id != membership.organization_id:
+            raise HTTPException(404, detail="Application not found")
+    if module_id:
+        module = db.get(ApplicationModule, module_id)
+        if module is None or module.organization_id != membership.organization_id:
+            raise HTTPException(404, detail="Module not found")
+        if application_id is None or module.application_id != application_id:
+            raise HTTPException(400, detail="Module must belong to the selected application")
+    roles = list(dict.fromkeys(r.strip() for r in audience_roles.split(",") if r.strip()))
+    if set(roles) - {r.value for r in RoleName if r != RoleName.PLATFORM_ADMIN}:
+        raise HTTPException(400, detail="Invalid audience role")
+    if environment and environment not in {e.value for e in ApplicationEnvironment}:
+        raise HTTPException(400, detail="Invalid environment")
+    # UploadFile is spooled to disk by Starlette. Seek for length and stream into
+    # S3 so a 1GB video never becomes a 1GB bytes allocation in each API worker.
+    file.file.seek(0, os.SEEK_END)
+    file_size = file.file.tell()
+    file.file.seek(0)
+    size_mb = file_size / (1024 * 1024)
     limit = settings.MAX_VIDEO_SIZE_MB if source_type == SourceType.VIDEO else settings.MAX_DOCUMENT_SIZE_MB
     if size_mb > limit:
         raise HTTPException(
@@ -110,25 +160,25 @@ def upload_source(
         application_id=application_id,
         module_id=module_id,
         content_owner_id=membership.user_id,
-        title=title,
+        title=title.strip(),
         description=description,
         source_type=source_type.value,
         status=SourceStatus.UPLOADED.value,
         feature_tag=feature_tag,
         application_version=application_version,
         environment=environment,
-        audience_roles=[r.strip() for r in audience_roles.split(",") if r.strip()],
+        audience_roles=roles,
         storage_key="",
-        original_filename=file.filename,
-        file_size_bytes=len(data),
+        original_filename=filename,
+        file_size_bytes=file_size,
         mime_type=file.content_type or "",
     )
     db.add(source)
     db.flush()
 
-    key = build_storage_key(str(membership.organization_id), str(source.id), file.filename)
+    key = build_storage_key(str(membership.organization_id), str(source.id), filename)
     ensure_bucket()
-    upload_fileobj(key, __import__("io").BytesIO(data), file.content_type or "application/octet-stream")
+    upload_fileobj(key, file.file, file.content_type or "application/octet-stream")
     source.storage_key = key
     db.commit()
     db.refresh(source)
@@ -143,7 +193,7 @@ def upload_source(
     # tests/CI (CELERY_TASK_ALWAYS_EAGER) so this executes synchronously there.
     from app.workers.tasks import process_source
 
-    process_source.delay(str(source.id))
+    _enqueue_processing(db, source, process_source)
 
     db.refresh(source)
     return _detail_out(source)
@@ -165,10 +215,7 @@ def get_source(
     membership: Membership = Depends(get_current_membership),
     db: Session = Depends(get_db),
 ):
-    stmt = select(Source).options(selectinload(Source.jobs)).where(Source.id == source_id)
-    source = db.scalars(stmt).first()
-    if source is None or source.organization_id != membership.organization_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Source not found")
+    source = _get_visible_source(db, membership, source_id)
     return _detail_out(source)
 
 
@@ -178,12 +225,14 @@ def list_chunks(
     membership: Membership = Depends(get_current_membership),
     db: Session = Depends(get_db),
 ):
-    source = _get_org_source(db, membership.organization_id, source_id)
+    source = _get_visible_source(db, membership, source_id)
     stmt = (
         select(TranscriptChunk)
         .where(TranscriptChunk.source_id == source.id)
         .order_by(TranscriptChunk.chunk_index)
     )
+    if ROLE_RANK[RoleName(membership.role)] < ROLE_RANK[RoleName.CONTENT_OWNER]:
+        stmt = stmt.where(or_(TranscriptChunk.audience_roles == [], TranscriptChunk.audience_roles.any(membership.role)))
     return db.scalars(stmt).all()
 
 
@@ -196,14 +245,51 @@ def update_chunk(
     db: Session = Depends(get_db),
 ):
     source = _get_org_source(db, membership.organization_id, source_id)
+    if source.status != SourceStatus.AWAITING_REVIEW.value:
+        raise HTTPException(409, detail="Only draft transcripts awaiting review can be edited")
     chunk = db.get(TranscriptChunk, chunk_id)
     if chunk is None or chunk.source_id != source.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Chunk not found")
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    changes = payload.model_dump(exclude_unset=True)
+    if any(value is None for value in changes.values()):
+        raise HTTPException(400, detail="Transcript fields cannot be null")
+    if payload.audience_roles is not None and set(payload.audience_roles) - {r.value for r in RoleName if r != RoleName.PLATFORM_ADMIN}:
+        raise HTTPException(400, detail="Invalid audience role")
+    if "text" in changes:
+        from app.services.embeddings import get_embeddings_provider
+        chunk.embedding = get_embeddings_provider().embed(changes["text"])
+    for field, value in changes.items():
         setattr(chunk, field, value)
     db.commit()
     db.refresh(chunk)
     return chunk
+
+
+def _enqueue_processing(db: Session, source: Source, task) -> None:
+    try:
+        task.delay(str(source.id))
+    except Exception:
+        source.status = SourceStatus.FAILED.value
+        source.failure_reason = "Processing queue unavailable. Please retry processing."
+        db.commit()
+
+
+@router.post("/{source_id}/retry", response_model=SourceDetailOut)
+def retry_source(
+    source_id: uuid.UUID,
+    membership: Membership = Depends(require_role(RoleName.CONTENT_OWNER)),
+    db: Session = Depends(get_db),
+):
+    source = _get_org_source(db, membership.organization_id, source_id)
+    if source.status != SourceStatus.FAILED.value:
+        raise HTTPException(409, detail="Only failed sources can be retried")
+    source.status = SourceStatus.QUEUED.value
+    source.failure_reason = None
+    db.commit()
+    from app.workers.tasks import process_source
+    _enqueue_processing(db, source, process_source)
+    db.refresh(source)
+    return _detail_out(source)
 
 
 def _transition(source: Source, new_status: SourceStatus) -> None:
@@ -244,9 +330,9 @@ def approve_source(
         description=payload.note,
     )
 
-    from app.workers.tasks import index_source
+    from app.services.pipeline import index_approved_source
 
-    index_source.delay(str(source.id))
+    index_approved_source(db, source)
     db.refresh(source)
     return _detail_out(source)
 
@@ -291,8 +377,8 @@ def delete_source(
     try:
         if source.storage_key:
             delete_object(source.storage_key)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception:
+        raise HTTPException(503, detail="Storage deletion failed. Please retry.")
     record_audit_event(
         db, action=AuditAction.SOURCE_DELETED, organization_id=membership.organization_id,
         actor_user_id=membership.user_id, resource_type="source", resource_id=str(source.id),

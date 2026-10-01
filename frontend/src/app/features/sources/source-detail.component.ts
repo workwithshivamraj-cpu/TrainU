@@ -1,16 +1,19 @@
 import { CommonModule } from '@angular/common';
-import { Component, OnInit, signal } from '@angular/core';
+import { Component, OnDestroy, OnInit, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
+import { errorMessage } from '../../core/error-message';
 import { AuthService } from '../../core/auth.service';
 import { SourcesService } from '../../core/api.services';
 import { SourceDetail, TranscriptChunk } from '../../core/models';
+import { ClipPlayerComponent } from '../../shared/clip-player.component';
 
 @Component({
   selector: 'app-source-detail',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterLink],
+  imports: [CommonModule, FormsModule, RouterLink, ClipPlayerComponent],
   template: `
+    @if (error()) { <div class="notice mb-5" role="alert">{{ error() }} <button class="underline ml-2" (click)="load()">Retry</button></div> }
     @if (source(); as s) {
       <div class="space-y-6">
         <div>
@@ -24,14 +27,14 @@ import { SourceDetail, TranscriptChunk } from '../../core/models';
               <span class="badge" [ngClass]="statusClass(s.status)">{{ s.status.replace('_',' ') }}</span>
               @if (auth.hasAtLeastRole('content_owner')) {
                 @if (s.status === 'awaiting_review') {
-                  <button class="btn-primary" (click)="approve()">Approve</button>
+                  <button class="btn-primary" [disabled]="busy()" (click)="approve()">Approve</button>
                 }
                 @if (s.status !== 'archived') {
-                  <button class="btn-secondary" (click)="archive()">Archive</button>
+                  <button class="btn-secondary" [disabled]="busy()" (click)="archive()">Archive</button>
                 }
               }
               @if (auth.hasAtLeastRole('org_admin') && s.status === 'archived') {
-                <button class="btn-danger" (click)="remove()">Delete</button>
+                <button class="btn-danger" [disabled]="busy()" (click)="remove()">Delete</button>
               }
             </div>
           </div>
@@ -43,11 +46,18 @@ import { SourceDetail, TranscriptChunk } from '../../core/models';
           </div>
         }
 
+        @if (['uploaded', 'queued', 'processing', 'approved'].includes(s.status)) { <div class="rounded-xl bg-brand-50 p-4 text-sm text-brand-800" role="status">Your source is being prepared. This page refreshes automatically while processing continues.</div> }
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div class="lg:col-span-2 space-y-6">
             @if (s.source_type === 'video' && s.playback_url) {
               <div class="card p-4">
-                <video class="w-full rounded-md bg-black aspect-video" controls [src]="s.playback_url"></video>
+                @if (selectedChunk(); as clip) {
+                  <app-clip-player [src]="s.playback_url" [startSeconds]="clip.start_seconds" [endSeconds]="clip.end_seconds"></app-clip-player>
+                  <p class="mt-3 text-sm text-slate-700">{{ clip.text }}</p>
+                } @else {
+                  <p class="text-sm text-slate-600">Transcript segments are not available yet. The full recording is below.</p>
+                  <video class="w-full mt-3 rounded-xl bg-slate-100 aspect-video" controls playsinline preload="metadata" [src]="s.playback_url"></video>
+                }
               </div>
             }
 
@@ -58,9 +68,9 @@ import { SourceDetail, TranscriptChunk } from '../../core/models';
               }
               <div class="space-y-3">
                 @for (c of chunks(); track c.id) {
-                  <div class="border border-slate-200 rounded-md p-3">
+                  <div class="border rounded-md p-3" [ngClass]="selectedChunk()?.id === c.id ? 'border-brand-300 bg-brand-50/40' : 'border-slate-200'">
                     <div class="flex items-center justify-between">
-                      <span class="text-xs font-mono text-brand-700">{{ formatTime(c.start_seconds) }}–{{ formatTime(c.end_seconds) }}</span>
+                      <button class="text-xs font-mono text-brand-700 hover:underline" type="button" (click)="selectClip(c)">{{ formatTime(c.start_seconds) }}–{{ formatTime(c.end_seconds) }} · Play this clip</button>
                       @if (auth.hasAtLeastRole('content_owner') && editingChunkId !== c.id) {
                         <button class="text-xs text-brand-600 hover:text-brand-700" (click)="startEdit(c)">Edit</button>
                       }
@@ -68,7 +78,7 @@ import { SourceDetail, TranscriptChunk } from '../../core/models';
                     @if (editingChunkId === c.id) {
                       <textarea class="input mt-2" rows="3" [(ngModel)]="editText" [name]="'edit-' + c.id"></textarea>
                       <div class="mt-2 flex gap-2">
-                        <button class="btn-primary text-xs" (click)="saveEdit(c)">Save</button>
+                        <button class="btn-primary text-xs" [disabled]="busy() || !editText.trim()" (click)="saveEdit(c)">Save</button>
                         <button class="btn-secondary text-xs" (click)="editingChunkId = null">Cancel</button>
                       </div>
                     } @else {
@@ -82,9 +92,9 @@ import { SourceDetail, TranscriptChunk } from '../../core/models';
           </div>
 
           <div class="space-y-6">
-            <div class="card p-5">
-              <h2 class="font-semibold text-slate-800 mb-3">Metadata</h2>
-              <dl class="text-sm space-y-2">
+            <details class="card p-5" open>
+              <summary class="font-semibold text-slate-800 cursor-pointer">Metadata</summary>
+              <dl class="text-sm space-y-2 mt-3">
                 <div class="flex justify-between"><dt class="text-slate-500">Type</dt><dd class="capitalize">{{ s.source_type }}</dd></div>
                 <div class="flex justify-between"><dt class="text-slate-500">Version</dt><dd>{{ s.application_version || '—' }}</dd></div>
                 <div class="flex justify-between"><dt class="text-slate-500">Environment</dt><dd class="capitalize">{{ s.environment || '—' }}</dd></div>
@@ -93,33 +103,42 @@ import { SourceDetail, TranscriptChunk } from '../../core/models';
                 <div class="flex justify-between"><dt class="text-slate-500">Audience roles</dt><dd>{{ s.audience_roles.join(', ') || 'All' }}</dd></div>
                 <div class="flex justify-between"><dt class="text-slate-500">Approved at</dt><dd>{{ s.approved_at ? (s.approved_at | date: 'short') : '—' }}</dd></div>
               </dl>
-            </div>
+            </details>
 
-            <div class="card p-5">
-              <h2 class="font-semibold text-slate-800 mb-3">Processing jobs</h2>
-              <ol class="space-y-2">
+            <details class="card p-5" open>
+              <summary class="font-semibold text-slate-800 cursor-pointer">Processing jobs</summary>
+              <ol class="space-y-3 mt-3">
                 @for (j of s.jobs; track j.id) {
-                  <li class="text-sm flex items-center justify-between">
-                    <span class="capitalize text-slate-700">{{ j.stage.replace('_',' ') }}</span>
-                    <span class="badge" [ngClass]="jobStatusClass(j.status)">{{ j.status }}</span>
+                  <li class="text-sm border-t border-slate-100 pt-2">
+                    <div class="flex items-center justify-between gap-2">
+                      <span class="capitalize text-slate-700">{{ j.stage.replace('_',' ') }}</span>
+                      <span class="badge" [ngClass]="jobStatusClass(jobStatusLabel(j))">{{ jobStatusLabel(j) }}</span>
+                    </div>
+                    @if (j.detail) { <p class="text-xs text-slate-500 mt-1">{{ j.detail }}</p> }
+                    @if (j.error) { <p class="text-xs text-red-700 mt-1">{{ j.error }}</p> }
                   </li>
                 }
                 @if (!s.jobs.length) {
                   <p class="text-sm text-slate-500">No jobs recorded yet.</p>
                 }
               </ol>
-            </div>
+            </details>
           </div>
         </div>
       </div>
-    } @else {
-      <p class="text-sm text-slate-500">Loading…</p>
+    } @else if (loading()) {
+      <p class="text-sm text-slate-500" role="status">Loading source…</p>
     }
   `,
 })
-export class SourceDetailComponent implements OnInit {
+export class SourceDetailComponent implements OnInit, OnDestroy {
   source = signal<SourceDetail | null>(null);
+  error = signal<string | null>(null);
+  busy = signal(false); loading = signal(true);
+  private pollTimer?: ReturnType<typeof setTimeout>;
+  private disposed = false;
   chunks = signal<TranscriptChunk[]>([]);
+  selectedChunk = signal<TranscriptChunk | null>(null);
   editingChunkId: string | null = null;
   editText = '';
 
@@ -135,13 +154,26 @@ export class SourceDetailComponent implements OnInit {
   }
 
   async load() {
+    if (this.pollTimer) clearTimeout(this.pollTimer);
+    this.error.set(null);
     const id = this.route.snapshot.paramMap.get('id')!;
-    const [source, chunks] = await Promise.all([
-      this.sourcesService.get(id),
-      this.sourcesService.chunks(id).catch(() => []),
-    ]);
-    this.source.set(source);
-    this.chunks.set(chunks);
+    try {
+      const [source, chunks] = await Promise.all([this.sourcesService.get(id), this.sourcesService.chunks(id)]);
+      if (this.disposed) return;
+      this.source.set(source); this.chunks.set(chunks);
+      const selectedId = this.route.snapshot.queryParamMap.get('chunk');
+      this.selectedChunk.set(chunks.find((chunk) => chunk.id === selectedId) ?? chunks[0] ?? null);
+      if (['uploaded', 'queued', 'processing', 'approved'].includes(source.status)) this.pollTimer = setTimeout(() => void this.load(), 5000);
+    } catch (e) { if (!this.disposed) this.error.set(errorMessage(e, 'This source could not be loaded. It may have been removed or your access has changed.')); }
+    finally { this.loading.set(false); }
+  }
+  ngOnDestroy() { this.disposed = true; if (this.pollTimer) clearTimeout(this.pollTimer); }
+  private async action(work: () => Promise<unknown>) {
+    if (this.busy()) return;
+    this.busy.set(true); this.error.set(null);
+    try { await work(); }
+    catch (e) { this.error.set(errorMessage(e, 'The change could not be saved. Please try again.')); }
+    finally { this.busy.set(false); }
   }
 
   startEdit(chunk: TranscriptChunk) {
@@ -149,33 +181,32 @@ export class SourceDetailComponent implements OnInit {
     this.editText = chunk.text;
   }
 
+  selectClip(chunk: TranscriptChunk) { this.selectedChunk.set(chunk); }
+
   async saveEdit(chunk: TranscriptChunk) {
     const s = this.source();
     if (!s) return;
-    await this.sourcesService.updateChunk(s.id, chunk.id, { text: this.editText });
-    this.editingChunkId = null;
-    await this.load();
+    await this.action(async () => { await this.sourcesService.updateChunk(s.id, chunk.id, { text: this.editText.trim() }); this.editingChunkId = null; await this.load(); });
   }
 
   async approve() {
     const s = this.source();
     if (!s) return;
-    await this.sourcesService.approve(s.id);
-    await this.load();
+    await this.action(async () => { await this.sourcesService.approve(s.id); await this.load(); });
   }
 
   async archive() {
     const s = this.source();
     if (!s) return;
-    await this.sourcesService.archive(s.id);
-    await this.load();
+    if (!window.confirm('Archive this source? It will no longer be used in new answers.')) return;
+    await this.action(async () => { await this.sourcesService.archive(s.id); await this.load(); });
   }
 
   async remove() {
     const s = this.source();
     if (!s) return;
-    await this.sourcesService.remove(s.id);
-    await this.router.navigate(['/sources']);
+    if (!window.confirm('Permanently delete this archived source and its content? This cannot be undone.')) return;
+    await this.action(async () => { await this.sourcesService.remove(s.id); await this.router.navigate(['/sources']); });
   }
 
   formatTime(totalSeconds: number): string {
@@ -207,5 +238,9 @@ export class SourceDetailComponent implements OnInit {
       failed: 'bg-red-50 text-red-700',
     };
     return map[status] ?? 'bg-slate-100 text-slate-600';
+  }
+
+  jobStatusLabel(job: SourceDetail['jobs'][number]): string {
+    return job.detail.toLowerCase().includes('used mock audio') ? 'mock only' : job.status;
   }
 }

@@ -84,9 +84,10 @@ def update_member_role(
     target = db.get(Membership, membership_id)
     if target is None or target.organization_id != caller.organization_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Member not found")
-    if payload.role not in {r.value for r in RoleName}:
+    if payload.role not in {r.value for r in RoleName if r != RoleName.PLATFORM_ADMIN}:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid role")
     old_role = target.role
+    _protect_last_admin(db, target, payload.role)
     target.role = payload.role
     db.commit()
     db.refresh(target)
@@ -110,6 +111,7 @@ def remove_member(
     target = db.get(Membership, membership_id)
     if target is None or target.organization_id != caller.organization_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Member not found")
+    _protect_last_admin(db, target, None)
     target.is_active = False
     db.commit()
     record_audit_event(
@@ -125,7 +127,7 @@ def create_invitation(
     caller: Membership = Depends(require_role(RoleName.ORG_ADMIN)),
     db: Session = Depends(get_db),
 ):
-    if payload.role not in {r.value for r in RoleName}:
+    if payload.role not in {r.value for r in RoleName if r != RoleName.PLATFORM_ADMIN}:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid role")
     invitation = Invitation(
         organization_id=caller.organization_id,
@@ -177,9 +179,12 @@ def revoke_invitation(
 def accept_invitation(
     payload: InvitationAccept, user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ):
-    invitation = db.scalars(select(Invitation).where(Invitation.token == payload.token)).first()
-    if invitation is None or invitation.status != InvitationStatus.PENDING.value:
+    invitation = db.scalars(select(Invitation).where(Invitation.token == payload.token).with_for_update()).first()
+    if (invitation is None or invitation.status != InvitationStatus.PENDING.value
+            or invitation.expires_at <= datetime.now(timezone.utc)):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid or expired invitation")
+    if invitation.role == RoleName.PLATFORM_ADMIN.value:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid invitation role")
     if invitation.email.lower() != user.email.lower():
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invitation email mismatch")
     existing = db.scalars(
@@ -207,3 +212,17 @@ def accept_invitation(
         membership_id=membership.id, user_id=user.id, email=user.email, full_name=user.full_name,
         role=membership.role, is_active=membership.is_active,
     )
+
+
+def _protect_last_admin(db: Session, target: Membership, next_role: str | None) -> None:
+    # Lock the organization to serialize concurrent attempts to remove its last admins.
+    db.scalars(select(Organization).where(Organization.id == target.organization_id).with_for_update()).first()
+    if target.is_active and target.role == RoleName.ORG_ADMIN.value and next_role != RoleName.ORG_ADMIN.value:
+        other_admin = db.scalars(select(Membership).where(
+            Membership.organization_id == target.organization_id,
+            Membership.id != target.id,
+            Membership.role == RoleName.ORG_ADMIN.value,
+            Membership.is_active.is_(True),
+        )).first()
+        if other_admin is None:
+            raise HTTPException(409, detail="Keep at least one active organization administrator")

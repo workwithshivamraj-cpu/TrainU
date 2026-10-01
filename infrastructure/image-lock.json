@@ -1,0 +1,23 @@
+{
+  "captured_at": "2026-09-29",
+  "platforms": {
+    "postgres": ["linux/amd64", "linux/arm64"],
+    "redis": ["linux/amd64", "linux/arm64"],
+    "object_storage": ["linux/amd64", "linux/arm64"],
+    "mailpit": ["linux/amd64", "linux/arm64"],
+    "clamav": ["linux/amd64"],
+    "backend_base": ["linux/amd64", "linux/arm64"],
+    "frontend_build_base": ["linux/amd64", "linux/arm64"],
+    "frontend_runtime_base": ["linux/amd64", "linux/arm64"]
+  },
+  "images": {
+    "postgres": "pgvector/pgvector:pg16@sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b",
+    "redis": "redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499",
+    "object_storage": "rustfs/rustfs:1.0.0@sha256:8cc9801755448b71a786705ce76692c77e14936cccd87cf2fc31842e58f4d1ff",
+    "mailpit": "ghcr.io/axllent/mailpit:v1.31.3@sha256:ed9b00c609e77e99c79b93f1178255ebc271868920f2c69a8d166bd5634ed10d",
+    "clamav": "clamav/clamav:1.5.4@sha256:ebec5bc138401b36ae987caa1a3fa3c3b2a21ed3d51f0bfa5852825e663e67b0",
+    "backend_base": "python:3.12-slim@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f",
+    "frontend_build_base": "node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1",
+    "frontend_runtime_base": "nginxinc/nginx-unprivileged:1.28-alpine@sha256:7377697a821c131a924a7105fafbe7414db4e9fcc77a6f08f776f33f141ec3f8"
+  }
+}

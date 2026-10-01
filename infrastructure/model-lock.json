@@ -1,0 +1,29 @@
+{
+  "captured_at": "2026-09-29",
+  "answer_model": {
+    "provider": "ollama",
+    "name": "qwen2.5:7b",
+    "digest": "845dbda0ea48ed749caafd9e6037047aa19acfcfd82e704d7ca97d631a0b697e",
+    "format": "gguf",
+    "quantization": "Q4_K_M",
+    "size_bytes": 4683087332,
+    "temperature": 0.1,
+    "top_p": 0.9,
+    "max_tokens": 768,
+    "seed": 42
+  },
+  "embedding_model": {
+    "provider": "sentence-transformers",
+    "name": "intfloat/multilingual-e5-small",
+    "revision": "614241f622f53c4eeff9890bdc4f31cfecc418b3",
+    "license": "mit",
+    "status": "pinned; local files and multilingual quality evaluation pending"
+  },
+  "transcription_model": {
+    "provider": "faster-whisper",
+    "name": "dropbox-dash/faster-whisper-large-v3-turbo",
+    "revision": "0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf",
+    "license": "mit",
+    "status": "pinned; local files and transcription quality evaluation pending"
+  }
+}
